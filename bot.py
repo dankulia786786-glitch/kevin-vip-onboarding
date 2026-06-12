@@ -19,9 +19,11 @@ PUPRIME_IMAGE = "https://raw.githubusercontent.com/dankulia786786-glitch/kevin-v
 
 onboarding_state = {}
 
-# reply_map: maps owner's reply message_id -> client user_id
-# So when Kevin replies to a forwarded message, bot sends it to the client
+# Maps owner reply message_id -> client user_id
 reply_map = {}
+
+# Maps all known clients: user_id -> {name, username}
+known_clients = {}
 
 def send_to_user(user_id, text, keyboard=None):
     payload = {"chat_id": user_id, "text": text, "parse_mode": "HTML"}
@@ -55,7 +57,6 @@ def notify_owner(text, keyboard=None):
     return None
 
 def forward_to_owner(user_id, name, username, text):
-    """Forward client message to Kevin and store reply mapping"""
     msg = (
         f"📩 <b>Message from client:</b>\n\n"
         f"👤 Name: {name}\n"
@@ -67,9 +68,11 @@ def forward_to_owner(user_id, name, username, text):
     mid = notify_owner(msg)
     if mid:
         reply_map[str(mid)] = str(user_id)
-        logger.info(f"Stored reply map: {mid} -> {user_id}")
 
 def handle_start(user_id, first_name, username):
+    # Store client
+    known_clients[str(user_id)] = {"name": first_name, "username": username}
+
     send_to_user(user_id,
         f"👋 <b>Welcome, {first_name} | GOLD SIGNALS 🔔</b>\n\n"
         "Get access to:\n"
@@ -90,15 +93,21 @@ def handle_start(user_id, first_name, username):
         ]}
     )
     onboarding_state[user_id] = {"step": "broker_choice", "first_name": first_name, "username": username}
-    notify_owner(
+
+    # Notify Kevin with chase-up button
+    mid = notify_owner(
         f"🔔 <b>New Lead Started Onboarding!</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Choosing broker..."
+        f"⏳ Status: Choosing broker...\n\n"
+        f"<i>↩️ Reply to THIS message to send them a message</i>",
     )
+    if mid:
+        reply_map[str(mid)] = str(user_id)
 
 def handle_vantage(user_id, first_name, username):
+    known_clients[str(user_id)] = {"name": first_name, "username": username}
     send_to_user(user_id,
         "🚀 <b>Complete the steps below to activate your Premium Group access.</b> (Takes 10s)\n\n"
         "1️⃣ Log-in to your Vantage client portal:\n👇\n"
@@ -120,15 +129,19 @@ def handle_vantage(user_id, first_name, username):
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_vantage"}]]}
     )
     onboarding_state[user_id] = {"step": "awaiting_done", "broker": "vantage", "first_name": first_name, "username": username}
-    notify_owner(
+    mid = notify_owner(
         f"📊 <b>Lead chose Vantage</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Completing IB transfer steps..."
+        f"⏳ Status: Completing IB transfer steps...\n\n"
+        f"<i>↩️ Reply to THIS message to send them a message</i>"
     )
+    if mid:
+        reply_map[str(mid)] = str(user_id)
 
 def handle_puprime(user_id, first_name, username):
+    known_clients[str(user_id)] = {"name": first_name, "username": username}
     send_to_user(user_id,
         "🚀 <b>Complete the steps below to activate your Premium Group access.</b> (Takes 10s)\n\n"
         "1️⃣ Log in to your PU Prime Client Portal\n👇\n"
@@ -150,13 +163,16 @@ def handle_puprime(user_id, first_name, username):
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_puprime"}]]}
     )
     onboarding_state[user_id] = {"step": "awaiting_done", "broker": "puprime", "first_name": first_name, "username": username}
-    notify_owner(
+    mid = notify_owner(
         f"📊 <b>Lead chose PU Prime</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Completing IB transfer steps..."
+        f"⏳ Status: Completing IB transfer steps...\n\n"
+        f"<i>↩️ Reply to THIS message to send them a message</i>"
     )
+    if mid:
+        reply_map[str(mid)] = str(user_id)
 
 def handle_done(user_id, first_name, username, broker):
     send_to_user(user_id,
@@ -165,13 +181,16 @@ def handle_done(user_id, first_name, username, broker):
         "👇 This will be used to verify your account and activate your Premium Group access."
     )
     onboarding_state[user_id] = {"step": "awaiting_account", "broker": broker, "first_name": first_name, "username": username}
-    notify_owner(
+    mid = notify_owner(
         f"✅ <b>Lead clicked DONE</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Waiting for MT4/MT5 account number..."
+        f"⏳ Status: Waiting for MT4/MT5 account number...\n\n"
+        f"<i>↩️ Reply to THIS message to send them a message</i>"
     )
+    if mid:
+        reply_map[str(mid)] = str(user_id)
 
 def handle_account_number(user_id, first_name, username, account_number, broker):
     broker_name = "Vantage" if broker == "vantage" else "PU Prime"
@@ -180,7 +199,7 @@ def handle_account_number(user_id, first_name, username, account_number, broker)
         "Our team will verify your account and activate your Premium Group access shortly.\n\n"
         "🏆 Welcome to Kevin's Gold Signals VIP!"
     )
-    notify_owner(
+    mid = notify_owner(
         f"🏆 <b>NEW VIP CLIENT COMPLETE!</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
@@ -189,7 +208,8 @@ def handle_account_number(user_id, first_name, username, account_number, broker)
         f"📋 MT4/MT5 Account: <b>{account_number}</b>\n\n"
         f"<i>↩️ Reply to THIS message to send them a message</i>"
     )
-    # Store reply map for this completion message too
+    if mid:
+        reply_map[str(mid)] = str(user_id)
     onboarding_state.pop(user_id, None)
 
 @app.route("/telegram_update", methods=["POST"])
@@ -232,7 +252,6 @@ def telegram_update():
         name     = user.get("first_name", "Friend")
         username = user.get("username", "no username")
         text     = message.get("text", "")
-        msg_id   = str(message.get("message_id", ""))
 
         # ── Kevin replying to a forwarded message ─────────────────────────
         if user_id == str(OWNER_ID):
@@ -245,8 +264,8 @@ def telegram_update():
                         f"💬 <b>Message from Kevin:</b>\n\n{text}"
                     )
                     notify_owner(f"✅ Your reply was sent to the client.")
-                    return jsonify({"ok": True})
-            # Kevin sent a non-reply message — ignore
+                else:
+                    notify_owner(f"⚠️ Could not find that client. Ask them to send a message first.")
             return jsonify({"ok": True})
 
         # ── Client messages ───────────────────────────────────────────────
@@ -259,7 +278,7 @@ def telegram_update():
             handle_account_number(user_id, name, username, text.strip(), state.get("broker", "unknown"))
             return jsonify({"ok": True})
 
-        # Any other message — forward to Kevin with reply capability
+        # Any other message — forward to Kevin
         forward_to_owner(user_id, name, username, text)
 
     except Exception as e:
