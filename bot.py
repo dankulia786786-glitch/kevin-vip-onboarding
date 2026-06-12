@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8808650060:AAGdfZbA_n5PHds59OL9iI5fVkkhCWGivP8")
-OWNER_ID  = os.environ.get("OWNER_ID", "8842842151")
+OWNER_ID  = os.environ.get("OWNER_ID", "6838959359")
 
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -18,6 +18,10 @@ VANTAGE_IMAGE = "https://raw.githubusercontent.com/dankulia786786-glitch/kevin-v
 PUPRIME_IMAGE = "https://raw.githubusercontent.com/dankulia786786-glitch/kevin-vip-onboarding/main/WhatsApp%20Image%202026-06-12%20at%2014.49.01.jpeg"
 
 onboarding_state = {}
+
+# reply_map: maps owner's reply message_id -> client user_id
+# So when Kevin replies to a forwarded message, bot sends it to the client
+reply_map = {}
 
 def send_to_user(user_id, text, keyboard=None):
     payload = {"chat_id": user_id, "text": text, "parse_mode": "HTML"}
@@ -37,12 +41,33 @@ def send_photo_to_user(user_id, photo_url):
     except Exception as e:
         logger.error(f"Photo error: {e}")
 
-def notify_owner(text):
+def notify_owner(text, keyboard=None):
+    payload = {"chat_id": OWNER_ID, "text": text, "parse_mode": "HTML"}
+    if keyboard:
+        payload["reply_markup"] = json.dumps(keyboard)
     try:
-        requests.post(f"{TELEGRAM_URL}/sendMessage",
-                      json={"chat_id": OWNER_ID, "text": text, "parse_mode": "HTML"}, timeout=10)
+        r = requests.post(f"{TELEGRAM_URL}/sendMessage", json=payload, timeout=10)
+        data = r.json()
+        if data.get("ok"):
+            return data["result"]["message_id"]
     except Exception as e:
         logger.error(f"Owner notify error: {e}")
+    return None
+
+def forward_to_owner(user_id, name, username, text):
+    """Forward client message to Kevin and store reply mapping"""
+    msg = (
+        f"📩 <b>Message from client:</b>\n\n"
+        f"👤 Name: {name}\n"
+        f"📲 Username: @{username}\n"
+        f"🆔 User ID: <code>{user_id}</code>\n\n"
+        f"💬 Message: {text}\n\n"
+        f"<i>↩️ Reply to THIS message to respond to them</i>"
+    )
+    mid = notify_owner(msg)
+    if mid:
+        reply_map[str(mid)] = str(user_id)
+        logger.info(f"Stored reply map: {mid} -> {user_id}")
 
 def handle_start(user_id, first_name, username):
     send_to_user(user_id,
@@ -65,15 +90,12 @@ def handle_start(user_id, first_name, username):
         ]}
     )
     onboarding_state[user_id] = {"step": "broker_choice", "first_name": first_name, "username": username}
-
-    # Notify Kevin immediately when someone starts
     notify_owner(
         f"🔔 <b>New Lead Started Onboarding!</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Choosing broker...\n"
-        f"💬 Chat with them: https://t.me/user?id={user_id}"
+        f"⏳ Status: Choosing broker..."
     )
 
 def handle_vantage(user_id, first_name, username):
@@ -98,14 +120,12 @@ def handle_vantage(user_id, first_name, username):
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_vantage"}]]}
     )
     onboarding_state[user_id] = {"step": "awaiting_done", "broker": "vantage", "first_name": first_name, "username": username}
-
     notify_owner(
         f"📊 <b>Lead chose Vantage</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Completing IB transfer steps...\n"
-        f"💬 Chat with them: https://t.me/user?id={user_id}"
+        f"⏳ Status: Completing IB transfer steps..."
     )
 
 def handle_puprime(user_id, first_name, username):
@@ -130,14 +150,12 @@ def handle_puprime(user_id, first_name, username):
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_puprime"}]]}
     )
     onboarding_state[user_id] = {"step": "awaiting_done", "broker": "puprime", "first_name": first_name, "username": username}
-
     notify_owner(
         f"📊 <b>Lead chose PU Prime</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Completing IB transfer steps...\n"
-        f"💬 Chat with them: https://t.me/user?id={user_id}"
+        f"⏳ Status: Completing IB transfer steps..."
     )
 
 def handle_done(user_id, first_name, username, broker):
@@ -147,14 +165,12 @@ def handle_done(user_id, first_name, username, broker):
         "👇 This will be used to verify your account and activate your Premium Group access."
     )
     onboarding_state[user_id] = {"step": "awaiting_account", "broker": broker, "first_name": first_name, "username": username}
-
     notify_owner(
         f"✅ <b>Lead clicked DONE</b>\n\n"
         f"👤 Name: {first_name}\n"
         f"📲 Username: @{username}\n"
         f"🆔 User ID: <code>{user_id}</code>\n\n"
-        f"⏳ Status: Waiting for MT4/MT5 account number...\n"
-        f"💬 Chat with them: https://t.me/user?id={user_id}"
+        f"⏳ Status: Waiting for MT4/MT5 account number..."
     )
 
 def handle_account_number(user_id, first_name, username, account_number, broker):
@@ -171,8 +187,9 @@ def handle_account_number(user_id, first_name, username, account_number, broker)
         f"🆔 User ID: <code>{user_id}</code>\n"
         f"🏦 Broker: {broker_name}\n"
         f"📋 MT4/MT5 Account: <b>{account_number}</b>\n\n"
-        f"💬 Reply directly: https://t.me/user?id={user_id}"
+        f"<i>↩️ Reply to THIS message to send them a message</i>"
     )
+    # Store reply map for this completion message too
     onboarding_state.pop(user_id, None)
 
 @app.route("/telegram_update", methods=["POST"])
@@ -180,6 +197,7 @@ def telegram_update():
     try:
         update = request.get_json(force=True)
 
+        # Button taps
         if "callback_query" in update:
             cq       = update["callback_query"]
             user     = cq.get("from", {})
@@ -192,9 +210,7 @@ def telegram_update():
                               json={"callback_query_id": cq["id"]}, timeout=5)
             except Exception:
                 pass
-
-            # Get stored username if available
-            stored = onboarding_state.get(user_id, {})
+            stored   = onboarding_state.get(user_id, {})
             username = stored.get("username", username)
 
             if data == "broker_vantage":
@@ -216,7 +232,24 @@ def telegram_update():
         name     = user.get("first_name", "Friend")
         username = user.get("username", "no username")
         text     = message.get("text", "")
+        msg_id   = str(message.get("message_id", ""))
 
+        # ── Kevin replying to a forwarded message ─────────────────────────
+        if user_id == str(OWNER_ID):
+            reply_to = message.get("reply_to_message", {})
+            if reply_to:
+                replied_mid = str(reply_to.get("message_id", ""))
+                client_id   = reply_map.get(replied_mid)
+                if client_id:
+                    send_to_user(client_id,
+                        f"💬 <b>Message from Kevin:</b>\n\n{text}"
+                    )
+                    notify_owner(f"✅ Your reply was sent to the client.")
+                    return jsonify({"ok": True})
+            # Kevin sent a non-reply message — ignore
+            return jsonify({"ok": True})
+
+        # ── Client messages ───────────────────────────────────────────────
         if text.strip() == "/start":
             handle_start(user_id, name, username)
             return jsonify({"ok": True})
@@ -226,15 +259,9 @@ def telegram_update():
             handle_account_number(user_id, name, username, text.strip(), state.get("broker", "unknown"))
             return jsonify({"ok": True})
 
-        # Any other message — forward to Kevin
-        notify_owner(
-            f"📩 <b>Message from bot user:</b>\n\n"
-            f"👤 Name: {name}\n"
-            f"📲 Username: @{username}\n"
-            f"🆔 User ID: <code>{user_id}</code>\n"
-            f"💬 Message: {text}\n\n"
-            f"Reply directly: https://t.me/user?id={user_id}"
-        )
+        # Any other message — forward to Kevin with reply capability
+        forward_to_owner(user_id, name, username, text)
+
     except Exception as e:
         logger.error(f"Update error: {e}")
     return jsonify({"ok": True})
