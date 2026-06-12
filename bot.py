@@ -1,4 +1,3 @@
-
 import os
 import json
 import logging
@@ -45,7 +44,7 @@ def notify_owner(text):
     except Exception as e:
         logger.error(f"Owner notify error: {e}")
 
-def handle_start(user_id, first_name):
+def handle_start(user_id, first_name, username):
     send_to_user(user_id,
         f"👋 <b>Welcome, {first_name} | GOLD SIGNALS 🔔</b>\n\n"
         "Get access to:\n"
@@ -65,12 +64,21 @@ def handle_start(user_id, first_name):
             [{"text": "🔴 PU Prime", "callback_data": "broker_puprime"}]
         ]}
     )
-    onboarding_state[user_id] = {"step": "broker_choice"}
-    notify_owner(f"🔔 <b>New VIP Lead!</b>\nName: {first_name}\nUser ID: <code>{user_id}</code>")
+    onboarding_state[user_id] = {"step": "broker_choice", "first_name": first_name, "username": username}
 
-def handle_vantage(user_id, first_name):
+    # Notify Kevin immediately when someone starts
+    notify_owner(
+        f"🔔 <b>New Lead Started Onboarding!</b>\n\n"
+        f"👤 Name: {first_name}\n"
+        f"📲 Username: @{username}\n"
+        f"🆔 User ID: <code>{user_id}</code>\n\n"
+        f"⏳ Status: Choosing broker...\n"
+        f"💬 Chat with them: https://t.me/user?id={user_id}"
+    )
+
+def handle_vantage(user_id, first_name, username):
     send_to_user(user_id,
-        "🚀 <b>Complete the steps below to activate your VIP access.</b> (Takes 10s)\n\n"
+        "🚀 <b>Complete the steps below to activate your Premium Group access.</b> (Takes 10s)\n\n"
         "1️⃣ Log-in to your Vantage client portal:\n👇\n"
         "https://secure.vantagemarkets.com/logout?lang=en_US\n\n"
         "2️⃣ Fill the Form 📋\n👇\n"
@@ -78,7 +86,7 @@ def handle_vantage(user_id, first_name):
         "3️⃣ Enter the following details exactly as shown:\n"
         "✅ Partnership Type: IB\n"
         "✅ IB Code: <b>58576</b>\n"
-        "✅ Reason: VIP\n\n"
+        "✅ Reason: PM\n\n"
         "👇 Step-by-step guide below:"
     )
     send_photo_to_user(user_id, VANTAGE_IMAGE)
@@ -89,12 +97,20 @@ def handle_vantage(user_id, first_name):
         "👇 Once completed, click the button below.",
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_vantage"}]]}
     )
-    onboarding_state[user_id] = {"step": "awaiting_done", "broker": "vantage"}
-    notify_owner(f"📊 <b>Lead chose Vantage</b>\nName: {first_name}\nUser ID: <code>{user_id}</code>")
+    onboarding_state[user_id] = {"step": "awaiting_done", "broker": "vantage", "first_name": first_name, "username": username}
 
-def handle_puprime(user_id, first_name):
+    notify_owner(
+        f"📊 <b>Lead chose Vantage</b>\n\n"
+        f"👤 Name: {first_name}\n"
+        f"📲 Username: @{username}\n"
+        f"🆔 User ID: <code>{user_id}</code>\n\n"
+        f"⏳ Status: Completing IB transfer steps...\n"
+        f"💬 Chat with them: https://t.me/user?id={user_id}"
+    )
+
+def handle_puprime(user_id, first_name, username):
     send_to_user(user_id,
-        "🚀 <b>Complete the steps below to activate your VIP access.</b> (Takes 10s)\n\n"
+        "🚀 <b>Complete the steps below to activate your Premium Group access.</b> (Takes 10s)\n\n"
         "1️⃣ Log in to your PU Prime Client Portal\n👇\n"
         "https://myaccount.puprime.com/home\n\n"
         "2️⃣ Open the IB Transfer Form\n👇\n"
@@ -102,7 +118,7 @@ def handle_puprime(user_id, first_name):
         "3️⃣ Enter the following details exactly as shown:\n"
         "✅ Partnership Type: IB\n"
         "✅ IB Code: <b>50151</b>\n"
-        "✅ Reason: VIP\n\n"
+        "✅ Reason: PM\n\n"
         "👇 Step-by-step guide below:"
     )
     send_photo_to_user(user_id, PUPRIME_IMAGE)
@@ -113,30 +129,48 @@ def handle_puprime(user_id, first_name):
         "👇 Once completed, click the button below.",
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_puprime"}]]}
     )
-    onboarding_state[user_id] = {"step": "awaiting_done", "broker": "puprime"}
-    notify_owner(f"📊 <b>Lead chose PU Prime</b>\nName: {first_name}\nUser ID: <code>{user_id}</code>")
+    onboarding_state[user_id] = {"step": "awaiting_done", "broker": "puprime", "first_name": first_name, "username": username}
 
-def handle_done(user_id, first_name, broker):
+    notify_owner(
+        f"📊 <b>Lead chose PU Prime</b>\n\n"
+        f"👤 Name: {first_name}\n"
+        f"📲 Username: @{username}\n"
+        f"🆔 User ID: <code>{user_id}</code>\n\n"
+        f"⏳ Status: Completing IB transfer steps...\n"
+        f"💬 Chat with them: https://t.me/user?id={user_id}"
+    )
+
+def handle_done(user_id, first_name, username, broker):
     send_to_user(user_id,
         "🎉 <b>Almost done!</b>\n\n"
         "Please enter your MT4/MT5 Account Number below.\n\n"
-        "👇 This will be used to verify your account and activate your VIP access."
+        "👇 This will be used to verify your account and activate your Premium Group access."
     )
-    onboarding_state[user_id] = {"step": "awaiting_account", "broker": broker}
+    onboarding_state[user_id] = {"step": "awaiting_account", "broker": broker, "first_name": first_name, "username": username}
 
-def handle_account_number(user_id, first_name, account_number, broker):
+    notify_owner(
+        f"✅ <b>Lead clicked DONE</b>\n\n"
+        f"👤 Name: {first_name}\n"
+        f"📲 Username: @{username}\n"
+        f"🆔 User ID: <code>{user_id}</code>\n\n"
+        f"⏳ Status: Waiting for MT4/MT5 account number...\n"
+        f"💬 Chat with them: https://t.me/user?id={user_id}"
+    )
+
+def handle_account_number(user_id, first_name, username, account_number, broker):
     broker_name = "Vantage" if broker == "vantage" else "PU Prime"
     send_to_user(user_id,
         "✅ <b>Account number received!</b>\n\n"
-        "Our team will verify your account and activate your VIP access shortly.\n\n"
+        "Our team will verify your account and activate your Premium Group access shortly.\n\n"
         "🏆 Welcome to Kevin's Gold Signals VIP!"
     )
     notify_owner(
-        f"🏆 <b>NEW VIP CLIENT READY!</b>\n\n"
-        f"Name: {first_name}\n"
-        f"User ID: <code>{user_id}</code>\n"
-        f"Broker: {broker_name}\n"
-        f"MT4/MT5 Account: <b>{account_number}</b>\n\n"
+        f"🏆 <b>NEW VIP CLIENT COMPLETE!</b>\n\n"
+        f"👤 Name: {first_name}\n"
+        f"📲 Username: @{username}\n"
+        f"🆔 User ID: <code>{user_id}</code>\n"
+        f"🏦 Broker: {broker_name}\n"
+        f"📋 MT4/MT5 Account: <b>{account_number}</b>\n\n"
         f"💬 Reply directly: https://t.me/user?id={user_id}"
     )
     onboarding_state.pop(user_id, None)
@@ -147,24 +181,30 @@ def telegram_update():
         update = request.get_json(force=True)
 
         if "callback_query" in update:
-            cq      = update["callback_query"]
-            user    = cq.get("from", {})
-            user_id = str(user.get("id"))
-            name    = user.get("first_name", "Friend")
-            data    = cq.get("data", "")
+            cq       = update["callback_query"]
+            user     = cq.get("from", {})
+            user_id  = str(user.get("id"))
+            name     = user.get("first_name", "Friend")
+            username = user.get("username", "no username")
+            data     = cq.get("data", "")
             try:
                 requests.post(f"{TELEGRAM_URL}/answerCallbackQuery",
                               json={"callback_query_id": cq["id"]}, timeout=5)
             except Exception:
                 pass
+
+            # Get stored username if available
+            stored = onboarding_state.get(user_id, {})
+            username = stored.get("username", username)
+
             if data == "broker_vantage":
-                handle_vantage(user_id, name)
+                handle_vantage(user_id, name, username)
             elif data == "broker_puprime":
-                handle_puprime(user_id, name)
+                handle_puprime(user_id, name, username)
             elif data == "done_vantage":
-                handle_done(user_id, name, "vantage")
+                handle_done(user_id, name, username, "vantage")
             elif data == "done_puprime":
-                handle_done(user_id, name, "puprime")
+                handle_done(user_id, name, username, "puprime")
             return jsonify({"ok": True})
 
         message = update.get("message", {})
@@ -178,19 +218,22 @@ def telegram_update():
         text     = message.get("text", "")
 
         if text.strip() == "/start":
-            handle_start(user_id, name)
+            handle_start(user_id, name, username)
             return jsonify({"ok": True})
 
         state = onboarding_state.get(user_id, {})
         if state.get("step") == "awaiting_account" and text.strip():
-            handle_account_number(user_id, name, text.strip(), state.get("broker", "unknown"))
+            handle_account_number(user_id, name, username, text.strip(), state.get("broker", "unknown"))
             return jsonify({"ok": True})
 
+        # Any other message — forward to Kevin
         notify_owner(
-            f"📩 <b>Message from bot user:</b>\n"
-            f"Name: {name}\nUsername: @{username}\n"
-            f"User ID: <code>{user_id}</code>\nMessage: {text}\n\n"
-            f"💬 Reply: https://t.me/user?id={user_id}"
+            f"📩 <b>Message from bot user:</b>\n\n"
+            f"👤 Name: {name}\n"
+            f"📲 Username: @{username}\n"
+            f"🆔 User ID: <code>{user_id}</code>\n"
+            f"💬 Message: {text}\n\n"
+            f"Reply directly: https://t.me/user?id={user_id}"
         )
     except Exception as e:
         logger.error(f"Update error: {e}")
