@@ -45,7 +45,9 @@ def requires_auth(f):
 DATA_DIR       = "/data"
 USERS_FILE     = "/data/vip_users.json"
 BROADCAST_FILE = "/data/broadcasts.json"
+MESSAGES_FILE  = "/data/messages.json"
 users_lock     = threading.Lock()
+messages_lock  = threading.Lock()
 
 def load_users():
     try:
@@ -81,6 +83,40 @@ def save_broadcasts(data):
             json.dump(data, f)
     except Exception as e:
         logger.error(f"Save broadcasts error: {e}")
+
+def load_messages():
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        if os.path.exists(MESSAGES_FILE):
+            with open(MESSAGES_FILE, "r") as f:
+                return json.load(f)
+    except Exception as e:
+        logger.error(f"Load messages error: {e}")
+    return {}
+
+def save_messages(msgs):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(MESSAGES_FILE, "w") as f:
+            json.dump(msgs, f)
+    except Exception as e:
+        logger.error(f"Save messages error: {e}")
+
+def store_client_message(user_id, text, direction="in"):
+    """direction: 'in' = client sent, 'out' = Kevin sent"""
+    with messages_lock:
+        msgs = load_messages()
+        uid = str(user_id)
+        if uid not in msgs:
+            msgs[uid] = []
+        msgs[uid].append({
+            "text":      text,
+            "direction": direction,
+            "time":      time.time()
+        })
+        # Keep last 200 messages per user
+        msgs[uid] = msgs[uid][-200:]
+        save_messages(msgs)
 
 users_db = load_users()
 onboarding_state = {}
@@ -364,7 +400,6 @@ def drip_scheduler():
                 if now - last_drip < DRIP_INTERVAL:
                     continue
 
-                # Random spread — don't send all at once
                 time.sleep(random.uniform(5, 120))
 
                 count = data.get("drip_count", 0)
@@ -387,14 +422,12 @@ tp_forward_lock = threading.Lock()
 
 @app.route("/forward_tp", methods=["POST"])
 def forward_tp():
-    """Receives profit card image from signals bot and forwards to all incomplete leads"""
     try:
         close_type = request.form.get("close_type", "TP1")
         pair       = request.form.get("pair", "XAUUSD")
         profit_str = request.form.get("profit_str", "")
         image_file = request.files.get("image")
 
-        # Dedup — only forward once per TP type per hour
         dedup_key = f"{pair}_{close_type}"
         now = time.time()
         with tp_forward_lock:
@@ -426,7 +459,6 @@ def forward_tp():
         for uid, udata in snapshot.items():
             if udata.get("completed"):
                 continue
-            # Max 2 TP forwards per day per user
             tp_count_today = udata.get("tp_forward_today", 0)
             last_tp_day    = udata.get("last_tp_forward_day", "")
             today_str      = __import__("datetime").date.today().isoformat()
@@ -518,6 +550,8 @@ def telegram_update():
                 client_id   = reply_map.get(replied_mid)
                 if client_id:
                     send_to_user(client_id, f"💬 <b>Message from Kevin:</b>\n\n{text}")
+                    # Store outgoing message in chat history
+                    store_client_message(client_id, text, direction="out")
                     notify_owner("✅ Your reply was sent to the client.")
                 else:
                     notify_owner("⚠️ Could not find that client.")
@@ -532,11 +566,16 @@ def telegram_update():
             handle_account_number(user_id, name, username, text.strip(), state.get("broker", "unknown"))
             return jsonify({"ok": True})
 
+        # Store incoming message in chat history
+        if text.strip():
+            store_client_message(user_id, text.strip(), direction="in")
+
         forward_to_owner(user_id, name, username, text)
 
     except Exception as e:
         logger.error(f"Update error: {e}")
     return jsonify({"ok": True})
+
 
 # ─── CRM DASHBOARD ────────────────────────────────────────────────────────────
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -587,6 +626,116 @@ tr:hover td { background: #1e1e35; }
 .filter-tab { padding: 6px 16px; border-radius: 20px; border: 1px solid #2a2a4e; background: #1a1a2e; color: #888; cursor: pointer; font-size: 13px; }
 .filter-tab.active { background: #d4af37; color: #000; border-color: #d4af37; font-weight: bold; }
 .toast { position: fixed; bottom: 30px; right: 30px; background: #00dc50; color: #000; padding: 12px 20px; border-radius: 8px; font-weight: bold; display: none; z-index: 999; }
+.btn-chat { background: #6c3483; color: #fff; padding: 5px 10px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; font-weight: bold; white-space: nowrap; }
+.btn-chat:hover { background: #8e44ad; }
+
+/* ── CHAT PANEL ── */
+#chat-overlay {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+}
+#chat-overlay.open { display: flex; }
+#chat-panel {
+  background: #1a1a2e;
+  border: 1px solid #d4af37;
+  border-radius: 16px;
+  width: 520px;
+  max-width: 95vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+#chat-header {
+  background: linear-gradient(135deg, #16213e, #1a1a2e);
+  padding: 16px 20px;
+  border-bottom: 1px solid #2a2a4e;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+#chat-header .chat-name { font-size: 16px; font-weight: bold; color: #d4af37; }
+#chat-header .chat-sub  { font-size: 12px; color: #888; margin-top: 2px; }
+#chat-close { background: none; border: none; color: #888; font-size: 22px; cursor: pointer; line-height: 1; }
+#chat-close:hover { color: #fff; }
+#chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 200px;
+}
+#chat-messages::-webkit-scrollbar { width: 4px; }
+#chat-messages::-webkit-scrollbar-thumb { background: #2a2a4e; border-radius: 4px; }
+.chat-bubble {
+  max-width: 80%;
+  padding: 10px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+.chat-bubble.in {
+  background: #0f0f1a;
+  border: 1px solid #2a2a4e;
+  color: #ddd;
+  align-self: flex-start;
+  border-bottom-left-radius: 4px;
+}
+.chat-bubble.out {
+  background: #d4af37;
+  color: #000;
+  align-self: flex-end;
+  border-bottom-right-radius: 4px;
+}
+.chat-bubble .bubble-time {
+  font-size: 10px;
+  opacity: 0.6;
+  margin-top: 4px;
+  text-align: right;
+}
+.chat-empty {
+  text-align: center;
+  color: #555;
+  font-size: 13px;
+  margin: auto;
+  padding: 20px;
+}
+#chat-input-area {
+  padding: 14px 16px;
+  border-top: 1px solid #2a2a4e;
+  display: flex;
+  gap: 10px;
+  background: #16213e;
+}
+#chat-input-area input {
+  flex: 1;
+  background: #0f0f1a;
+  border: 1px solid #2a2a4e;
+  border-radius: 8px;
+  color: #fff;
+  padding: 10px 14px;
+  font-size: 13px;
+  outline: none;
+}
+#chat-input-area input:focus { border-color: #d4af37; }
+#chat-send-btn {
+  background: #d4af37;
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  padding: 10px 18px;
+  font-weight: bold;
+  cursor: pointer;
+  font-size: 13px;
+}
+#chat-send-btn:hover { background: #f0c840; }
 </style>
 </head>
 <body>
@@ -643,13 +792,34 @@ tr:hover td { background: #1e1e35; }
         <th>Status</th>
         <th>Steps</th>
         <th>Drip #</th>
-        <th>Message</th>
+        <th>Chat</th>
+        <th>Quick Send</th>
       </tr>
     </thead>
     <tbody id="leads-body">
-      <tr><td colspan="9" style="text-align:center; color:#888; padding:30px;">Loading...</td></tr>
+      <tr><td colspan="10" style="text-align:center; color:#888; padding:30px;">Loading...</td></tr>
     </tbody>
   </table>
+</div>
+
+<!-- CHAT PANEL OVERLAY -->
+<div id="chat-overlay" onclick="closeChatOnOverlay(event)">
+  <div id="chat-panel">
+    <div id="chat-header">
+      <div>
+        <div class="chat-name" id="chat-title">Chat</div>
+        <div class="chat-sub" id="chat-sub"></div>
+      </div>
+      <button id="chat-close" onclick="closeChat()">✕</button>
+    </div>
+    <div id="chat-messages">
+      <div class="chat-empty">Loading messages...</div>
+    </div>
+    <div id="chat-input-area">
+      <input type="text" id="chat-input" placeholder="Type a message to send via Telegram..." onkeydown="if(event.key==='Enter') sendChatMsg()" />
+      <button id="chat-send-btn" onclick="sendChatMsg()">Send ✈️</button>
+    </div>
+  </div>
 </div>
 
 <div class="toast" id="toast"></div>
@@ -657,6 +827,9 @@ tr:hover td { background: #1e1e35; }
 <script>
 let allLeads = [];
 let currentFilter = 'all';
+let activeChatUserId = null;
+let activeChatName   = null;
+let chatPollInterval = null;
 
 function showToast(msg, color='#00dc50') {
   const t = document.getElementById('toast');
@@ -694,7 +867,7 @@ function renderTable(leads) {
   });
 
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#888;padding:30px;">No leads found</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#888;padding:30px;">No leads found</td></tr>';
     return;
   }
 
@@ -710,6 +883,7 @@ function renderTable(leads) {
     const uname = l.username && l.username !== 'no username'
       ? `<a href="https://t.me/${l.username}" target="_blank" style="color:#4a90e2">@${l.username}</a>`
       : `<span style="color:#555">No username</span>`;
+    const escapedName = (l.name || 'Client').replace(/'/g, "\\'");
 
     return `<tr data-id="${l.user_id}">
       <td>${i+1}</td>
@@ -720,6 +894,11 @@ function renderTable(leads) {
       <td>${status}</td>
       <td><div class="steps-list">${steps}</div></td>
       <td style="text-align:center">${l.drip_count || 0}</td>
+      <td>
+        <button class="btn-chat" onclick="openChat('${l.user_id}', '${escapedName}', '${l.username || ''}')">
+          💬 View Chat
+        </button>
+      </td>
       <td>
         <div class="msg-input">
           <input type="text" id="msg-${l.user_id}" placeholder="Send message..." />
@@ -773,6 +952,86 @@ async function sendBroadcast(target) {
   });
   const d = await r.json();
   showToast(`✅ Broadcast sent to ${d.sent} leads!`);
+}
+
+// ── CHAT PANEL ──────────────────────────────────────────
+function openChat(uid, name, username) {
+  activeChatUserId = uid;
+  activeChatName   = name;
+  document.getElementById('chat-title').textContent = '💬 ' + name;
+  document.getElementById('chat-sub').textContent   = username ? '@' + username : 'No username';
+  document.getElementById('chat-overlay').classList.add('open');
+  document.getElementById('chat-input').value = '';
+  loadChatMessages();
+  // Poll for new messages every 8 seconds while panel is open
+  if (chatPollInterval) clearInterval(chatPollInterval);
+  chatPollInterval = setInterval(loadChatMessages, 8000);
+}
+
+function closeChat() {
+  document.getElementById('chat-overlay').classList.remove('open');
+  activeChatUserId = null;
+  if (chatPollInterval) { clearInterval(chatPollInterval); chatPollInterval = null; }
+}
+
+function closeChatOnOverlay(e) {
+  if (e.target === document.getElementById('chat-overlay')) closeChat();
+}
+
+async function loadChatMessages() {
+  if (!activeChatUserId) return;
+  try {
+    const r = await fetch('/api/chat/' + activeChatUserId);
+    const d = await r.json();
+    renderChatMessages(d.messages || []);
+  } catch(e) { console.error(e); }
+}
+
+function formatTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'});
+}
+
+function renderChatMessages(messages) {
+  const box = document.getElementById('chat-messages');
+  if (!messages.length) {
+    box.innerHTML = '<div class="chat-empty">No messages yet.<br>When ' + (activeChatName||'this client') + ' messages the bot, you\'ll see them here.</div>';
+    return;
+  }
+  const wasAtBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 30;
+  box.innerHTML = messages.map(m => `
+    <div class="chat-bubble ${m.direction}">
+      ${escapeHtml(m.text)}
+      <div class="bubble-time">${formatTime(m.time)}</div>
+    </div>
+  `).join('');
+  if (wasAtBottom || messages.length <= 5) {
+    box.scrollTop = box.scrollHeight;
+  }
+}
+
+function escapeHtml(str) {
+  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+async function sendChatMsg() {
+  const input = document.getElementById('chat-input');
+  const text  = input.value.trim();
+  if (!text || !activeChatUserId) return;
+  input.value = '';
+  const r = await fetch('/api/message', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({user_id: activeChatUserId, text})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    showToast('✅ Sent!');
+    await loadChatMessages();
+  } else {
+    showToast('❌ Failed to send', '#e74c3c');
+    input.value = text;
+  }
 }
 
 function updateClock() {
@@ -830,6 +1089,15 @@ def api_leads():
     })
 
 
+@app.route("/api/chat/<user_id>")
+@requires_auth
+def api_chat(user_id):
+    with messages_lock:
+        msgs = load_messages()
+    messages = msgs.get(str(user_id), [])
+    return jsonify({"messages": messages, "user_id": user_id})
+
+
 @app.route("/api/message", methods=["POST"])
 @requires_auth
 def api_message():
@@ -839,6 +1107,8 @@ def api_message():
     if not user_id or not text:
         return jsonify({"ok": False})
     ok = send_to_user(user_id, f"💬 <b>Message from Kevin:</b>\n\n{text}")
+    if ok:
+        store_client_message(user_id, text, direction="out")
     return jsonify({"ok": ok})
 
 
@@ -877,7 +1147,6 @@ def api_broadcast():
             save_users(users_db)
         sent += 1
 
-    # Log broadcast
     broadcasts = load_broadcasts()
     broadcasts.append({"time": time.time(), "text": text[:100], "sent": sent, "target": target})
     save_broadcasts(broadcasts[-50:])
