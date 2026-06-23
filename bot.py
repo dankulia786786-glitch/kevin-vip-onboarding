@@ -5,7 +5,6 @@ import requests
 import threading
 import time
 import random
-import hashlib
 from functools import wraps
 from flask import Flask, request, jsonify, Response
 
@@ -46,8 +45,12 @@ DATA_DIR       = "/data"
 USERS_FILE     = "/data/vip_users.json"
 BROADCAST_FILE = "/data/broadcasts.json"
 MESSAGES_FILE  = "/data/messages.json"
+UNREAD_FILE    = "/data/unread.json"
+NOTES_FILE     = "/data/notes.json"
 users_lock     = threading.Lock()
 messages_lock  = threading.Lock()
+unread_lock    = threading.Lock()
+notes_lock     = threading.Lock()
 
 def load_users():
     try:
@@ -102,11 +105,44 @@ def save_messages(msgs):
     except Exception as e:
         logger.error(f"Save messages error: {e}")
 
+def load_unread():
+    try:
+        if os.path.exists(UNREAD_FILE):
+            with open(UNREAD_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def save_unread(data):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(UNREAD_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Save unread error: {e}")
+
+def load_notes():
+    try:
+        if os.path.exists(NOTES_FILE):
+            with open(NOTES_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return {}
+
+def save_notes(data):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(NOTES_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Save notes error: {e}")
+
 def store_client_message(user_id, text, direction="in"):
-    """direction: 'in' = client sent, 'out' = Kevin sent"""
+    uid = str(user_id)
     with messages_lock:
         msgs = load_messages()
-        uid = str(user_id)
         if uid not in msgs:
             msgs[uid] = []
         msgs[uid].append({
@@ -114,9 +150,20 @@ def store_client_message(user_id, text, direction="in"):
             "direction": direction,
             "time":      time.time()
         })
-        # Keep last 200 messages per user
         msgs[uid] = msgs[uid][-200:]
         save_messages(msgs)
+    # Mark as unread if incoming
+    if direction == "in":
+        with unread_lock:
+            unread = load_unread()
+            unread[uid] = unread.get(uid, 0) + 1
+            save_unread(unread)
+    # Update last_seen for incoming messages
+    if direction == "in":
+        with users_lock:
+            if uid in users_db:
+                users_db[uid]["last_seen"] = time.time()
+                save_users(users_db)
 
 users_db = load_users()
 onboarding_state = {}
@@ -208,6 +255,7 @@ def handle_start(user_id, first_name, username):
             "broker":      existing.get("broker"),
             "mt5_account": existing.get("mt5_account"),
             "steps":       existing.get("steps", []),
+            "last_seen":   existing.get("last_seen", time.time()),
         }
         save_users(users_db)
 
@@ -232,6 +280,10 @@ def handle_start(user_id, first_name, username):
     )
     onboarding_state[user_id] = {"step": "broker_choice", "first_name": first_name, "username": username}
     _add_step(user_id, "Started onboarding")
+
+    # Log to chat history
+    store_client_message(user_id, "▶️ Client started the bot (/start)", direction="event")
+    store_client_message(user_id, "🤖 Bot: Welcome! Please choose your broker — Vantage or PU Prime.", direction="out")
 
     mid = notify_owner(
         f"🔔 <b>New Lead Started Onboarding!</b>\n\n"
@@ -280,6 +332,11 @@ def handle_vantage(user_id, first_name, username):
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_vantage"}]]}
     )
     onboarding_state[user_id] = {"step": "awaiting_done", "broker": "vantage", "first_name": first_name, "username": username}
+
+    # Log to chat history
+    store_client_message(user_id, "🔵 Client tapped: Vantage", direction="event")
+    store_client_message(user_id, "🤖 Bot: Sent Vantage IB transfer instructions (IB Code: 58576). Waiting for DONE.", direction="out")
+
     mid = notify_owner(
         f"📊 <b>Lead chose Vantage</b>\n\n"
         f"👤 Name: {first_name}\n"
@@ -319,6 +376,11 @@ def handle_puprime(user_id, first_name, username):
         keyboard={"inline_keyboard": [[{"text": "✅ DONE", "callback_data": "done_puprime"}]]}
     )
     onboarding_state[user_id] = {"step": "awaiting_done", "broker": "puprime", "first_name": first_name, "username": username}
+
+    # Log to chat history
+    store_client_message(user_id, "🔴 Client tapped: PU Prime", direction="event")
+    store_client_message(user_id, "🤖 Bot: Sent PU Prime IB transfer instructions (IB Code: 50151). Waiting for DONE.", direction="out")
+
     mid = notify_owner(
         f"📊 <b>Lead chose PU Prime</b>\n\n"
         f"👤 Name: {first_name}\n"
@@ -332,6 +394,11 @@ def handle_puprime(user_id, first_name, username):
 
 def handle_done(user_id, first_name, username, broker):
     _add_step(user_id, "Clicked DONE")
+
+    # Log to chat history
+    store_client_message(user_id, "✅ Client tapped: DONE (IB transfer completed)", direction="event")
+    store_client_message(user_id, "🤖 Bot: Please enter your MT4/MT5 account number.", direction="out")
+
     send_to_user(user_id,
         "🎉 <b>Almost there — you're getting FREE access!</b>\n\n"
         "Please enter your MT4/MT5 Account Number below.\n\n"
@@ -352,6 +419,10 @@ def handle_done(user_id, first_name, username, broker):
 def handle_account_number(user_id, first_name, username, account_number, broker):
     broker_name = "Vantage" if broker == "vantage" else "PU Prime"
     _add_step(user_id, f"Submitted MT5: {account_number}")
+
+    # Log to chat history
+    store_client_message(user_id, f"🔢 Client entered MT5 number: {account_number}", direction="event")
+    store_client_message(user_id, "🤖 Bot: Account received! Team will verify and activate your access shortly. Welcome! 🏆", direction="out")
 
     with users_lock:
         if str(user_id) in users_db:
@@ -380,7 +451,7 @@ def handle_account_number(user_id, first_name, username, account_number, broker)
 
 # ─── DRIP SCHEDULER ───────────────────────────────────────────────────────────
 MAX_DRIP_DAYS = 30
-DRIP_INTERVAL = 86400  # 24 hours
+DRIP_INTERVAL = 86400
 
 def drip_scheduler():
     logger.info("Drip scheduler started")
@@ -442,7 +513,6 @@ def forward_tp():
             "TP3": f"ALL targets hit on {pair_name}!",
         }
         tp_label = tp_labels.get(close_type, f"{close_type} hit on {pair_name}!")
-
         caption = (
             f"🔥 <b>{tp_label}</b>\n\n"
             f"Our FREE members just made <b>{profit_str}</b> — <b>FOR FREE!</b>\n\n"
@@ -473,20 +543,19 @@ def forward_tp():
                 if image_bytes:
                     files   = {"photo": ("result.jpg", image_bytes, "image/jpeg")}
                     payload = {
-                        "chat_id":    uid,
-                        "caption":    caption,
-                        "parse_mode": "HTML",
+                        "chat_id":      uid,
+                        "caption":      caption,
+                        "parse_mode":   "HTML",
                         "reply_markup": json.dumps(JOIN_BUTTON)
                     }
-                    r = requests.post(f"{TELEGRAM_URL}/sendPhoto",
-                                      files=files, data=payload, timeout=15)
+                    r  = requests.post(f"{TELEGRAM_URL}/sendPhoto", files=files, data=payload, timeout=15)
                     ok = r.json().get("ok", False)
                 else:
                     ok = send_to_user(uid, caption, keyboard=JOIN_BUTTON)
 
                 if ok:
                     with users_lock:
-                        users_db[uid]["tp_forward_today"]   = tp_count_today + 1
+                        users_db[uid]["tp_forward_today"]    = tp_count_today + 1
                         users_db[uid]["last_tp_forward_day"] = today_str
                         save_users(users_db)
                     sent += 1
@@ -550,7 +619,6 @@ def telegram_update():
                 client_id   = reply_map.get(replied_mid)
                 if client_id:
                     send_to_user(client_id, f"💬 <b>Message from Kevin:</b>\n\n{text}")
-                    # Store outgoing message in chat history
                     store_client_message(client_id, text, direction="out")
                     notify_owner("✅ Your reply was sent to the client.")
                 else:
@@ -566,7 +634,6 @@ def telegram_update():
             handle_account_number(user_id, name, username, text.strip(), state.get("broker", "unknown"))
             return jsonify({"ok": True})
 
-        # Store incoming message in chat history
         if text.strip():
             store_client_message(user_id, text.strip(), direction="in")
 
@@ -578,194 +645,176 @@ def telegram_update():
 
 
 # ─── CRM DASHBOARD ────────────────────────────────────────────────────────────
-DASHBOARD_HTML = """<!DOCTYPE html>
+DASHBOARD_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>Kevin VIP CRM</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; min-height: 100vh; }
-.header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 20px 30px; border-bottom: 2px solid #d4af37; display: flex; align-items: center; justify-content: space-between; }
-.header h1 { font-size: 22px; color: #d4af37; }
-.header .subtitle { font-size: 13px; color: #888; margin-top: 4px; }
-.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; padding: 24px 30px; }
-.stat-card { background: #1a1a2e; border-radius: 12px; padding: 20px; border: 1px solid #2a2a4e; text-align: center; }
-.stat-card .number { font-size: 36px; font-weight: bold; color: #d4af37; }
-.stat-card .label { font-size: 13px; color: #888; margin-top: 6px; }
+
+/* HEADER */
+.header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 14px 20px; border-bottom: 2px solid #d4af37; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.header h1 { font-size: 18px; color: #d4af37; }
+.header .subtitle { font-size: 12px; color: #888; margin-top: 2px; }
+.header-right { text-align: right; font-size: 12px; color: #888; }
+
+/* STATS */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; padding: 16px 20px; }
+.stat-card { background: #1a1a2e; border-radius: 10px; padding: 14px; border: 1px solid #2a2a4e; text-align: center; }
+.stat-card .number { font-size: 28px; font-weight: bold; color: #d4af37; }
+.stat-card .label { font-size: 11px; color: #888; margin-top: 4px; }
 .stat-card.green .number { color: #00dc50; }
 .stat-card.red .number { color: #ff4444; }
 .stat-card.blue .number { color: #4a90e2; }
-.section { padding: 0 30px 30px; }
-.section-title { font-size: 16px; font-weight: bold; color: #d4af37; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-.broadcast-box { background: #1a1a2e; border-radius: 12px; padding: 20px; border: 1px solid #2a2a4e; margin-bottom: 24px; }
-.broadcast-box textarea { width: 100%; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 8px; color: #fff; padding: 12px; font-size: 14px; resize: vertical; min-height: 80px; }
-.broadcast-box input[type=text] { width: 100%; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 8px; color: #fff; padding: 10px 12px; font-size: 14px; margin-top: 10px; }
-.btn { padding: 10px 20px; border-radius: 8px; border: none; cursor: pointer; font-size: 14px; font-weight: bold; transition: all 0.2s; }
+
+/* SECTION */
+.section { padding: 0 20px 24px; }
+.section-title { font-size: 15px; font-weight: bold; color: #d4af37; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+
+/* BROADCAST */
+.broadcast-box { background: #1a1a2e; border-radius: 12px; padding: 16px; border: 1px solid #2a2a4e; margin-bottom: 20px; }
+.broadcast-box textarea { width: 100%; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 8px; color: #fff; padding: 10px; font-size: 13px; resize: vertical; min-height: 70px; }
+.broadcast-box input[type=text] { width: 100%; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 8px; color: #fff; padding: 8px 10px; font-size: 13px; margin-top: 8px; }
+.btn { padding: 8px 16px; border-radius: 8px; border: none; cursor: pointer; font-size: 13px; font-weight: bold; transition: all 0.2s; }
 .btn-gold { background: #d4af37; color: #000; }
 .btn-gold:hover { background: #f0c840; }
 .btn-red { background: #c0392b; color: #fff; }
 .btn-green { background: #27ae60; color: #fff; }
 .btn-blue { background: #2980b9; color: #fff; }
-.btn:hover { opacity: 0.85; transform: translateY(-1px); }
-.btn-row { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
-table { width: 100%; border-collapse: collapse; background: #1a1a2e; border-radius: 12px; overflow: hidden; }
-th { background: #d4af37; color: #000; padding: 12px 16px; text-align: left; font-size: 13px; }
-td { padding: 12px 16px; border-bottom: 1px solid #2a2a4e; font-size: 13px; color: #ccc; vertical-align: middle; }
-tr:hover td { background: #1e1e35; }
-.badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: bold; }
+.btn:hover { opacity: 0.88; transform: translateY(-1px); }
+.btn-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* SEARCH & FILTERS */
+.search-bar { width: 100%; background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 8px; color: #fff; padding: 9px 12px; font-size: 13px; margin-bottom: 12px; }
+.filter-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+.filter-tab { padding: 5px 14px; border-radius: 20px; border: 1px solid #2a2a4e; background: #1a1a2e; color: #888; cursor: pointer; font-size: 12px; }
+.filter-tab.active { background: #d4af37; color: #000; border-color: #d4af37; font-weight: bold; }
+
+/* CARDS (mobile-first layout) */
+.leads-grid { display: flex; flex-direction: column; gap: 12px; }
+.lead-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4e;
+  border-radius: 12px;
+  padding: 14px;
+  position: relative;
+}
+.lead-card:hover { border-color: #d4af37; }
+.lead-card-top { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.lead-name-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.lead-name { font-size: 15px; font-weight: bold; color: #fff; }
+.online-dot { width: 8px; height: 8px; border-radius: 50%; background: #555; display: inline-block; flex-shrink: 0; }
+.online-dot.online { background: #00dc50; box-shadow: 0 0 6px #00dc50; }
+.last-seen { font-size: 11px; color: #666; }
+.badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 10px; font-weight: bold; }
 .badge-green { background: #1a3a2a; color: #00dc50; border: 1px solid #00dc50; }
 .badge-orange { background: #3a2a1a; color: #f39c12; border: 1px solid #f39c12; }
 .badge-blue { background: #1a2a3a; color: #4a90e2; border: 1px solid #4a90e2; }
-.steps-list { font-size: 11px; color: #888; }
-.msg-input { display: flex; gap: 8px; margin-top: 8px; }
-.msg-input input { flex: 1; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 6px; color: #fff; padding: 6px 10px; font-size: 12px; }
-.search-bar { width: 100%; background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 8px; color: #fff; padding: 10px 14px; font-size: 14px; margin-bottom: 16px; }
-.filter-tabs { display: flex; gap: 8px; margin-bottom: 16px; }
-.filter-tab { padding: 6px 16px; border-radius: 20px; border: 1px solid #2a2a4e; background: #1a1a2e; color: #888; cursor: pointer; font-size: 13px; }
-.filter-tab.active { background: #d4af37; color: #000; border-color: #d4af37; font-weight: bold; }
-.toast { position: fixed; bottom: 30px; right: 30px; background: #00dc50; color: #000; padding: 12px 20px; border-radius: 8px; font-weight: bold; display: none; z-index: 999; }
-.btn-chat { background: #6c3483; color: #fff; padding: 5px 10px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; font-weight: bold; white-space: nowrap; }
-.btn-chat:hover { background: #8e44ad; }
 
-/* ── CHAT PANEL ── */
+/* PROGRESS TICKS */
+.progress-ticks { display: flex; gap: 5px; margin: 8px 0; align-items: center; }
+.tick { width: 22px; height: 22px; border-radius: 50%; border: 2px solid #333; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #555; transition: all 0.3s; flex-shrink: 0; }
+.tick.done { border-color: #00dc50; background: #00dc50; color: #000; }
+.tick-label { font-size: 10px; color: #666; margin-left: 6px; }
+
+/* UNREAD BADGE */
+.unread-badge { background: #e74c3c; color: #fff; border-radius: 50%; width: 18px; height: 18px; font-size: 10px; font-weight: bold; display: inline-flex; align-items: center; justify-content: center; margin-left: 4px; animation: pulse 1.5s infinite; }
+@keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.2); } }
+
+/* ACTION BUTTONS ROW */
+.lead-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; align-items: center; }
+.btn-chat { background: #6c3483; color: #fff; padding: 5px 10px; border-radius: 6px; border: none; cursor: pointer; font-size: 11px; font-weight: bold; display: flex; align-items: center; gap: 4px; }
+.btn-chat:hover { background: #8e44ad; }
+.btn-handled { background: transparent; border: 1px solid #555; color: #888; padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 11px; }
+.btn-handled.active { border-color: #00dc50; color: #00dc50; background: #1a3a2a; }
+.quick-input { flex: 1; min-width: 120px; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 6px; color: #fff; padding: 5px 8px; font-size: 12px; }
+.btn-send-quick { background: #2980b9; color: #fff; border: none; border-radius: 6px; padding: 5px 10px; font-size: 12px; font-weight: bold; cursor: pointer; }
+
+/* NOTES */
+.notes-area { width: 100%; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 6px; color: #aaa; padding: 6px 8px; font-size: 11px; resize: none; min-height: 42px; margin-top: 8px; font-family: inherit; }
+.notes-area:focus { border-color: #d4af37; outline: none; color: #fff; }
+.notes-saved { font-size: 10px; color: #00dc50; display: none; margin-top: 2px; }
+
+/* TOAST */
+.toast { position: fixed; bottom: 20px; right: 20px; background: #00dc50; color: #000; padding: 10px 18px; border-radius: 8px; font-weight: bold; display: none; z-index: 9999; font-size: 13px; max-width: 90vw; }
+
+/* CHAT PANEL */
 #chat-overlay {
-  display: none;
-  position: fixed; inset: 0;
-  background: rgba(0,0,0,0.7);
-  z-index: 1000;
-  align-items: center;
-  justify-content: center;
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.75); z-index: 1000;
+  align-items: center; justify-content: center; padding: 12px;
 }
 #chat-overlay.open { display: flex; }
 #chat-panel {
-  background: #1a1a2e;
-  border: 1px solid #d4af37;
-  border-radius: 16px;
-  width: 520px;
-  max-width: 95vw;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
+  background: #1a1a2e; border: 1px solid #d4af37;
+  border-radius: 16px; width: 100%; max-width: 520px;
+  max-height: 90vh; display: flex; flex-direction: column; overflow: hidden;
 }
 #chat-header {
   background: linear-gradient(135deg, #16213e, #1a1a2e);
-  padding: 16px 20px;
-  border-bottom: 1px solid #2a2a4e;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
+  padding: 14px 16px; border-bottom: 1px solid #2a2a4e;
+  display: flex; align-items: center; justify-content: space-between;
 }
-#chat-header .chat-name { font-size: 16px; font-weight: bold; color: #d4af37; }
-#chat-header .chat-sub  { font-size: 12px; color: #888; margin-top: 2px; }
-#chat-close { background: none; border: none; color: #888; font-size: 22px; cursor: pointer; line-height: 1; }
+#chat-header .chat-name { font-size: 15px; font-weight: bold; color: #d4af37; }
+#chat-header .chat-sub  { font-size: 11px; color: #888; margin-top: 2px; }
+#chat-close { background: none; border: none; color: #888; font-size: 22px; cursor: pointer; }
 #chat-close:hover { color: #fff; }
 #chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  min-height: 200px;
+  flex: 1; overflow-y: auto; padding: 14px;
+  display: flex; flex-direction: column; gap: 8px; min-height: 200px;
 }
-#chat-messages::-webkit-scrollbar { width: 4px; }
-#chat-messages::-webkit-scrollbar-thumb { background: #2a2a4e; border-radius: 4px; }
-.chat-bubble {
-  max-width: 80%;
-  padding: 10px 14px;
-  border-radius: 14px;
-  font-size: 13px;
-  line-height: 1.5;
-  word-break: break-word;
-}
-.chat-bubble.in {
-  background: #0f0f1a;
-  border: 1px solid #2a2a4e;
-  color: #ddd;
-  align-self: flex-start;
-  border-bottom-left-radius: 4px;
-}
-.chat-bubble.out {
-  background: #d4af37;
-  color: #000;
-  align-self: flex-end;
-  border-bottom-right-radius: 4px;
-}
-.chat-bubble .bubble-time {
-  font-size: 10px;
-  opacity: 0.6;
-  margin-top: 4px;
-  text-align: right;
-}
-.chat-empty {
-  text-align: center;
-  color: #555;
-  font-size: 13px;
-  margin: auto;
-  padding: 20px;
-}
-#chat-input-area {
-  padding: 14px 16px;
-  border-top: 1px solid #2a2a4e;
-  display: flex;
-  gap: 10px;
-  background: #16213e;
-}
-#chat-input-area input {
-  flex: 1;
-  background: #0f0f1a;
-  border: 1px solid #2a2a4e;
-  border-radius: 8px;
-  color: #fff;
-  padding: 10px 14px;
-  font-size: 13px;
-  outline: none;
-}
-#chat-input-area input:focus { border-color: #d4af37; }
-#chat-send-btn {
-  background: #d4af37;
-  color: #000;
-  border: none;
-  border-radius: 8px;
-  padding: 10px 18px;
-  font-weight: bold;
-  cursor: pointer;
-  font-size: 13px;
-}
-#chat-send-btn:hover { background: #f0c840; }
-#chat-file-btn {
-  background: #2a2a4e;
-  color: #fff;
-  border: 1px solid #3a3a6e;
-  border-radius: 8px;
-  padding: 10px 14px;
-  font-size: 16px;
-  cursor: pointer;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-}
+#chat-messages::-webkit-scrollbar { width: 3px; }
+#chat-messages::-webkit-scrollbar-thumb { background: #2a2a4e; border-radius: 3px; }
+.chat-bubble { max-width: 82%; padding: 9px 13px; border-radius: 14px; font-size: 13px; line-height: 1.5; word-break: break-word; }
+.chat-bubble.in { background: #0f0f1a; border: 1px solid #2a2a4e; color: #ddd; align-self: flex-start; border-bottom-left-radius: 4px; }
+.chat-bubble.out { background: #d4af37; color: #000; align-self: flex-end; border-bottom-right-radius: 4px; }
+.chat-bubble.event { background: #1a2a1a; border: 1px solid #2a4a2a; color: #7ec87e; align-self: center; font-size: 11px; padding: 5px 10px; border-radius: 20px; max-width: 95%; text-align: center; }
+.bubble-time { font-size: 10px; opacity: 0.55; margin-top: 3px; text-align: right; }
+.chat-empty { text-align: center; color: #555; font-size: 13px; margin: auto; padding: 20px; }
+#chat-input-area { padding: 12px 14px; border-top: 1px solid #2a2a4e; display: flex; gap: 8px; background: #16213e; }
+#chat-input { flex: 1; background: #0f0f1a; border: 1px solid #2a2a4e; border-radius: 8px; color: #fff; padding: 9px 12px; font-size: 13px; outline: none; }
+#chat-input:focus { border-color: #d4af37; }
+#chat-file-btn { background: #2a2a4e; color: #fff; border: 1px solid #3a3a6e; border-radius: 8px; padding: 9px 12px; font-size: 15px; cursor: pointer; display: flex; align-items: center; }
 #chat-file-btn:hover { background: #3a3a6e; }
+#chat-send-btn { background: #d4af37; color: #000; border: none; border-radius: 8px; padding: 9px 16px; font-weight: bold; cursor: pointer; font-size: 13px; white-space: nowrap; }
+#chat-send-btn:hover { background: #f0c840; }
+
+/* DESKTOP TABLE (hidden on mobile) */
+@media (min-width: 900px) {
+  .leads-grid { display: none; }
+  .leads-table-wrap { display: block; }
+}
+@media (max-width: 899px) {
+  .leads-table-wrap { display: none; }
+  .leads-grid { display: flex; }
+  .stats { grid-template-columns: repeat(3, 1fr); }
+  .section { padding: 0 12px 20px; }
+  .header { padding: 12px 14px; }
+}
+.leads-table-wrap table { width: 100%; border-collapse: collapse; background: #1a1a2e; border-radius: 12px; overflow: hidden; }
+.leads-table-wrap th { background: #d4af37; color: #000; padding: 10px 12px; text-align: left; font-size: 12px; }
+.leads-table-wrap td { padding: 10px 12px; border-bottom: 1px solid #2a2a4e; font-size: 12px; color: #ccc; vertical-align: middle; }
+.leads-table-wrap tr:hover td { background: #1e1e35; }
 </style>
 </head>
 <body>
 <div class="header">
   <div>
-    <h1>👑 Kevin VIP CRM Dashboard</h1>
-    <div class="subtitle">Gold Signals — Lead Management System</div>
+    <h1>👑 Kevin VIP CRM</h1>
+    <div class="subtitle">Gold Signals — Lead Management</div>
   </div>
-  <div style="text-align:right; font-size:13px; color:#888;">
+  <div class="header-right">
     <div id="clock"></div>
-    <div style="margin-top:4px;">Auto-refreshes every 60s</div>
+    <div style="margin-top:2px;font-size:11px;">Auto-refresh 30s</div>
   </div>
 </div>
 
-<div class="stats" id="stats">
-  <div class="stat-card"><div class="number" id="s-total">-</div><div class="label">Total Leads</div></div>
-  <div class="stat-card green"><div class="number" id="s-done">-</div><div class="label">✅ Completed</div></div>
+<div class="stats">
+  <div class="stat-card"><div class="number" id="s-total">-</div><div class="label">Total</div></div>
+  <div class="stat-card green"><div class="number" id="s-done">-</div><div class="label">✅ Done</div></div>
   <div class="stat-card red"><div class="number" id="s-pending">-</div><div class="label">⏳ Pending</div></div>
   <div class="stat-card blue"><div class="number" id="s-vantage">-</div><div class="label">🔵 Vantage</div></div>
   <div class="stat-card blue"><div class="number" id="s-puprime">-</div><div class="label">🔴 PU Prime</div></div>
@@ -774,48 +823,43 @@ tr:hover td { background: #1e1e35; }
 <div class="section">
   <div class="section-title">📢 Broadcast Message</div>
   <div class="broadcast-box">
-    <div style="font-size:13px; color:#888; margin-bottom:10px;">Send a message, testimonial, or promotion to ALL pending leads (1 per day limit applies)</div>
-    <textarea id="bc-text" placeholder="Type your message here... e.g. 🔥 We just hit TP3 on Gold — members made £420 for FREE today! Don't miss the next one 👇"></textarea>
-    <input type="text" id="bc-media" placeholder="Optional: Paste image or video URL (leave blank for text only)" />
+    <div style="font-size:12px;color:#888;margin-bottom:8px;">Send to ALL pending leads (1 per day limit)</div>
+    <textarea id="bc-text" placeholder="e.g. We just hit TP3 on Gold — members made £420 for FREE today!"></textarea>
+    <input type="text" id="bc-media" placeholder="Optional: image or video URL" />
     <div class="btn-row">
-      <button class="btn btn-gold" onclick="sendBroadcast('all')">📢 Send to ALL Pending</button>
-      <button class="btn btn-blue" onclick="sendBroadcast('no_broker')">Send to Not Started</button>
-      <button class="btn btn-green" onclick="sendBroadcast('vantage')">Send to Vantage Only</button>
-      <button class="btn btn-red" onclick="sendBroadcast('puprime')">Send to PU Prime Only</button>
+      <button class="btn btn-gold" onclick="sendBroadcast('all')">📢 All Pending</button>
+      <button class="btn btn-blue" onclick="sendBroadcast('no_broker')">Not Started</button>
+      <button class="btn btn-green" onclick="sendBroadcast('vantage')">Vantage Only</button>
+      <button class="btn btn-red" onclick="sendBroadcast('puprime')">PU Prime Only</button>
     </div>
   </div>
 
   <div class="section-title">👥 All Leads</div>
-  <input class="search-bar" type="text" id="search" placeholder="🔍 Search by name, username or MT5..." onkeyup="filterTable()" />
+  <input class="search-bar" type="text" id="search" placeholder="🔍 Search name, username, MT5..." onkeyup="filterLeads()" />
   <div class="filter-tabs">
-    <div class="filter-tab active" onclick="setFilter('all', this)">All</div>
-    <div class="filter-tab" onclick="setFilter('completed', this)">✅ Completed</div>
-    <div class="filter-tab" onclick="setFilter('pending', this)">⏳ Pending</div>
-    <div class="filter-tab" onclick="setFilter('Vantage', this)">🔵 Vantage</div>
-    <div class="filter-tab" onclick="setFilter('PU Prime', this)">🔴 PU Prime</div>
+    <div class="filter-tab active" onclick="setFilter('all',this)">All</div>
+    <div class="filter-tab" onclick="setFilter('completed',this)">✅ Done</div>
+    <div class="filter-tab" onclick="setFilter('pending',this)">⏳ Pending</div>
+    <div class="filter-tab" onclick="setFilter('Vantage',this)">🔵 Vantage</div>
+    <div class="filter-tab" onclick="setFilter('PU Prime',this)">🔴 PU Prime</div>
   </div>
-  <table id="leads-table">
-    <thead>
-      <tr>
-        <th>#</th>
-        <th>Name</th>
-        <th>Username</th>
-        <th>Broker</th>
-        <th>MT5 Account</th>
-        <th>Status</th>
-        <th>Steps</th>
-        <th>Drip #</th>
-        <th>Chat</th>
-        <th>Quick Send</th>
-      </tr>
-    </thead>
-    <tbody id="leads-body">
-      <tr><td colspan="10" style="text-align:center; color:#888; padding:30px;">Loading...</td></tr>
-    </tbody>
-  </table>
+
+  <!-- MOBILE CARDS -->
+  <div class="leads-grid" id="leads-grid"></div>
+
+  <!-- DESKTOP TABLE -->
+  <div class="leads-table-wrap">
+    <table>
+      <thead><tr>
+        <th>#</th><th>Name</th><th>Username</th><th>Broker</th><th>MT5</th>
+        <th>Status</th><th>Progress</th><th>Last Seen</th><th>Drip</th><th>Chat</th><th>Quick Send</th>
+      </tr></thead>
+      <tbody id="leads-tbody"></tbody>
+    </table>
+  </div>
 </div>
 
-<!-- CHAT PANEL OVERLAY -->
+<!-- CHAT PANEL -->
 <div id="chat-overlay" onclick="closeChatOnOverlay(event)">
   <div id="chat-panel">
     <div id="chat-header">
@@ -825,14 +869,11 @@ tr:hover td { background: #1e1e35; }
       </div>
       <button id="chat-close" onclick="closeChat()">✕</button>
     </div>
-    <div id="chat-messages">
-      <div class="chat-empty">Loading messages...</div>
-    </div>
+    <div id="chat-messages"><div class="chat-empty">Loading...</div></div>
     <div id="chat-input-area">
-      <input type="text" id="chat-input" placeholder="Type a message to send via Telegram..." onkeydown="if(event.key==='Enter') sendChatMsg()" />
-      <label id="chat-file-btn" title="Send image or file">
-        📎
-        <input type="file" id="chat-file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" onchange="sendChatFile()" />
+      <input type="text" id="chat-input" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendChatMsg()" />
+      <label id="chat-file-btn" title="Send image/file">
+        📎<input type="file" id="chat-file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" onchange="sendChatFile()" />
       </label>
       <button id="chat-send-btn" onclick="sendChatMsg()">Send ✈️</button>
     </div>
@@ -842,11 +883,26 @@ tr:hover td { background: #1e1e35; }
 <div class="toast" id="toast"></div>
 
 <script>
-let allLeads = [];
+let allLeads   = [];
+let allUnread  = {};
+let allNotes   = {};
 let currentFilter = 'all';
 let activeChatUserId = null;
 let activeChatName   = null;
 let chatPollInterval = null;
+const STEPS = ['Started','Broker','Done','MT5','Complete'];
+
+// ── DESKTOP NOTIFICATIONS ──
+function requestNotifPerm() {
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
+}
+function showDesktopNotif(title, body) {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body, icon: '' });
+  }
+}
 
 function showToast(msg, color='#00dc50') {
   const t = document.getElementById('toast');
@@ -860,67 +916,157 @@ function setFilter(f, el) {
   currentFilter = f;
   document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
   el.classList.add('active');
-  renderTable(allLeads);
+  renderAll(allLeads);
 }
 
-function filterTable() {
-  renderTable(allLeads);
-}
+function filterLeads() { renderAll(allLeads); }
 
-function renderTable(leads) {
-  const search = document.getElementById('search').value.toLowerCase();
-  const tbody  = document.getElementById('leads-body');
-  let filtered = leads.filter(l => {
-    const matchSearch = !search ||
-      (l.name || '').toLowerCase().includes(search) ||
-      (l.username || '').toLowerCase().includes(search) ||
-      (l.mt5_account || '').toLowerCase().includes(search);
-    const matchFilter =
-      currentFilter === 'all' ||
-      (currentFilter === 'completed' && l.completed) ||
-      (currentFilter === 'pending' && !l.completed) ||
-      (currentFilter === l.broker);
-    return matchSearch && matchFilter;
+function getFiltered() {
+  const search = (document.getElementById('search').value || '').toLowerCase();
+  return allLeads.filter(l => {
+    const ms = !search ||
+      (l.name||'').toLowerCase().includes(search) ||
+      (l.username||'').toLowerCase().includes(search) ||
+      (l.mt5_account||'').toLowerCase().includes(search);
+    const mf = currentFilter==='all' ||
+      (currentFilter==='completed' && l.completed) ||
+      (currentFilter==='pending' && !l.completed) ||
+      (currentFilter===l.broker);
+    return ms && mf;
   });
+}
 
+function getProgress(l) {
+  const steps = (l.steps||[]).map(s=>s.text);
+  return [
+    steps.some(s=>s.includes('Started')),
+    steps.some(s=>s.includes('Chose')),
+    steps.some(s=>s.includes('DONE')),
+    steps.some(s=>s.includes('MT5')||s.includes('Submitted')),
+    !!l.completed
+  ];
+}
+
+function ticksHtml(l) {
+  const prog = getProgress(l);
+  return prog.map((done,i) =>
+    `<div class="tick ${done?'done':''}" title="${STEPS[i]}">${done?'✓':''}` +
+    `<title>${STEPS[i]}</title></div>`
+  ).join('');
+}
+
+function lastSeenHtml(l) {
+  if (!l.last_seen) return '<span style="color:#555">—</span>';
+  const diff = Date.now()/1000 - l.last_seen;
+  const isOnline = diff < 300;
+  let label;
+  if (diff < 60)       label = 'Just now';
+  else if (diff < 3600) label = Math.floor(diff/60) + 'm ago';
+  else if (diff < 86400) label = Math.floor(diff/3600) + 'h ago';
+  else                  label = Math.floor(diff/86400) + 'd ago';
+  return `<span class="online-dot ${isOnline?'online':''}" style="display:inline-block;margin-right:4px"></span><span class="last-seen">${label}</span>`;
+}
+
+function chatBtnHtml(l) {
+  const uid = l.user_id;
+  const esc = (l.name||'Client').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  const uname = (l.username||'').replace(/'/g,"\\'");
+  const unread = allUnread[uid] || 0;
+  const badge  = unread > 0 ? `<span class="unread-badge">${unread}</span>` : '';
+  return `<button class="btn-chat" onclick="openChat('${uid}','${esc}','${uname}')">💬${badge}</button>`;
+}
+
+function renderAll(leads) {
+  const filtered = getFiltered(leads);
+  renderCards(filtered);
+  renderTable(filtered);
+}
+
+function renderCards(filtered) {
+  const grid = document.getElementById('leads-grid');
   if (!filtered.length) {
-    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#888;padding:30px;">No leads found</td></tr>';
+    grid.innerHTML = '<div style="text-align:center;color:#888;padding:30px">No leads found</div>';
     return;
   }
+  grid.innerHTML = filtered.map((l,i) => {
+    const uid   = l.user_id;
+    const esc   = (l.name||'Client').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    const uname = (l.username||'').replace(/'/g,"\\'");
+    const unread = allUnread[uid]||0;
+    const badge  = unread>0?`<span class="unread-badge">${unread}</span>`:'';
+    const prog   = getProgress(l);
+    const note   = allNotes[uid]||'';
+    const isOnline = l.last_seen && (Date.now()/1000 - l.last_seen < 300);
 
-  tbody.innerHTML = filtered.map((l, i) => {
-    const status = l.completed
-      ? '<span class="badge badge-green">✅ Complete</span>'
-      : '<span class="badge badge-orange">⏳ Pending</span>';
-    const broker = l.broker
-      ? `<span class="badge badge-blue">${l.broker}</span>`
-      : '<span style="color:#555">—</span>';
-    const steps = (l.steps || []).map(s => `<div>• ${s.text}</div>`).join('') || '—';
-    const mt5   = l.mt5_account || '<span style="color:#555">—</span>';
-    const uname = l.username && l.username !== 'no username'
-      ? `<a href="https://t.me/${l.username}" target="_blank" style="color:#4a90e2">@${l.username}</a>`
-      : `<span style="color:#555">No username</span>`;
-    const escapedName = (l.name || 'Client').replace(/'/g, "\\'");
-
-    return `<tr data-id="${l.user_id}">
-      <td>${i+1}</td>
-      <td><b>${l.name || '—'}</b></td>
-      <td>${uname}</td>
-      <td>${broker}</td>
-      <td>${mt5}</td>
-      <td>${status}</td>
-      <td><div class="steps-list">${steps}</div></td>
-      <td style="text-align:center">${l.drip_count || 0}</td>
-      <td>
-        <button class="btn-chat" onclick="openChat('${l.user_id}', '${escapedName}', '${l.username || ''}')">
-          💬 View Chat
-        </button>
-      </td>
-      <td>
-        <div class="msg-input">
-          <input type="text" id="msg-${l.user_id}" placeholder="Send message..." />
-          <button class="btn btn-blue" style="padding:6px 12px;font-size:12px" onclick="sendMsg('${l.user_id}')">Send</button>
+    return `<div class="lead-card" id="card-${uid}">
+      <div class="lead-card-top">
+        <div>
+          <div class="lead-name-row">
+            <span class="online-dot ${isOnline?'online':''}"></span>
+            <span class="lead-name">${l.name||'—'}</span>
+            ${l.broker?`<span class="badge badge-blue">${l.broker}</span>`:''}
+            ${l.completed?'<span class="badge badge-green">✅ Done</span>':'<span class="badge badge-orange">⏳ Pending</span>'}
+          </div>
+          <div style="font-size:11px;color:#666;margin-top:3px">
+            ${l.username&&l.username!=='no username'?`<a href="https://t.me/${l.username}" target="_blank" style="color:#4a90e2">@${l.username}</a>`:'No username'}
+            ${l.mt5_account?` &bull; MT5: ${l.mt5_account}`:''}
+          </div>
+          <div style="font-size:11px;color:#666;margin-top:2px">${lastSeenHtml(l)}</div>
         </div>
+        <div style="font-size:11px;color:#555;text-align:right">Drip: ${l.drip_count||0}</div>
+      </div>
+      <div class="progress-ticks">
+        ${prog.map((done,idx)=>`<div class="tick ${done?'done':''}" title="${STEPS[idx]}">${done?'✓':idx+1}</div>`).join('')}
+        <span class="tick-label">${STEPS.filter((_,i)=>prog[i]).length}/5 steps</span>
+      </div>
+      <div class="lead-actions">
+        <button class="btn-chat" onclick="openChat('${uid}','${esc}','${uname}')">💬 Chat ${badge}</button>
+        <button class="btn-handled ${l.handled?'active':''}" onclick="toggleHandled('${uid}',this)">${l.handled?'✅ Handled':'Mark handled'}</button>
+        <input class="quick-input" type="text" id="qi-${uid}" placeholder="Quick send..." onkeydown="if(event.key==='Enter')sendQuick('${uid}')" />
+        <button class="btn-send-quick" onclick="sendQuick('${uid}')">Send</button>
+      </div>
+      <textarea class="notes-area" id="note-${uid}" placeholder="Add a private note... (auto-saves)" onblur="saveNote('${uid}')" onkeydown="if(event.ctrlKey&&event.key==='Enter')saveNote('${uid}')">${note}</textarea>
+      <div class="notes-saved" id="note-saved-${uid}">✅ Saved</div>
+    </div>`;
+  }).join('');
+}
+
+function renderTable(filtered) {
+  const tbody = document.getElementById('leads-tbody');
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;color:#888;padding:24px">No leads found</td></tr>';
+    return;
+  }
+  tbody.innerHTML = filtered.map((l,i) => {
+    const uid  = l.user_id;
+    const prog = getProgress(l);
+    const note = allNotes[uid]||'';
+    const uname = l.username&&l.username!=='no username'
+      ? `<a href="https://t.me/${l.username}" target="_blank" style="color:#4a90e2">@${l.username}</a>`
+      : '<span style="color:#555">No username</span>';
+    const esc   = (l.name||'Client').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    const uesc  = (l.username||'').replace(/'/g,"\\'");
+    const unread = allUnread[uid]||0;
+    const badge  = unread>0?`<span class="unread-badge">${unread}</span>`:'';
+    return `<tr>
+      <td>${i+1}</td>
+      <td><b>${l.name||'—'}</b><br><span style="font-size:10px;color:#666">${lastSeenHtml(l)}</span></td>
+      <td>${uname}</td>
+      <td>${l.broker?`<span class="badge badge-blue">${l.broker}</span>`:'<span style="color:#555">—</span>'}</td>
+      <td>${l.mt5_account||'<span style="color:#555">—</span>'}</td>
+      <td>${l.completed?'<span class="badge badge-green">✅ Done</span>':'<span class="badge badge-orange">⏳ Pending</span>'}</td>
+      <td><div class="progress-ticks">${prog.map((done,idx)=>`<div class="tick ${done?'done':''}" title="${STEPS[idx]}">${done?'✓':idx+1}</div>`).join('')}</div></td>
+      <td>${lastSeenHtml(l)}</td>
+      <td>${l.drip_count||0}</td>
+      <td><button class="btn-chat" onclick="openChat('${uid}','${esc}','${uesc}')">💬 ${badge}</button>
+          <button class="btn-handled ${l.handled?'active':''}" style="margin-top:4px" onclick="toggleHandled('${uid}',this)">${l.handled?'✅':'Mark done'}</button></td>
+      <td>
+        <div style="display:flex;gap:4px;margin-bottom:4px">
+          <input class="quick-input" style="min-width:100px" type="text" id="qi-${uid}" placeholder="Send..." onkeydown="if(event.key==='Enter')sendQuick('${uid}')" />
+          <button class="btn-send-quick" onclick="sendQuick('${uid}')">Send</button>
+        </div>
+        <textarea class="notes-area" id="note-dt-${uid}" style="min-height:32px" placeholder="Note..." onblur="saveNote('${uid}',true)">${note}</textarea>
+        <div class="notes-saved" id="note-saved-dt-${uid}">✅ Saved</div>
       </td>
     </tr>`;
   }).join('');
@@ -928,61 +1074,109 @@ function renderTable(leads) {
 
 async function loadLeads() {
   try {
-    const r = await fetch('/api/leads');
-    const data = await r.json();
-    allLeads = data.leads || [];
+    const [lr, ur, nr] = await Promise.all([
+      fetch('/api/leads').then(r=>r.json()),
+      fetch('/api/unread').then(r=>r.json()),
+      fetch('/api/notes').then(r=>r.json()),
+    ]);
+    const prevLeads = allLeads.map(l=>l.user_id);
+    allLeads  = lr.leads || [];
+    allUnread = ur.unread || {};
+    allNotes  = nr.notes || {};
 
-    document.getElementById('s-total').textContent   = data.total;
-    document.getElementById('s-done').textContent    = data.completed;
-    document.getElementById('s-pending').textContent = data.pending;
-    document.getElementById('s-vantage').textContent = data.vantage;
-    document.getElementById('s-puprime').textContent = data.puprime;
+    document.getElementById('s-total').textContent   = lr.total;
+    document.getElementById('s-done').textContent    = lr.completed;
+    document.getElementById('s-pending').textContent = lr.pending;
+    document.getElementById('s-vantage').textContent = lr.vantage;
+    document.getElementById('s-puprime').textContent = lr.puprime;
 
-    renderTable(allLeads);
-  } catch(e) {
-    console.error(e);
-  }
+    // Desktop notification for new leads
+    const newLeads = allLeads.filter(l => !prevLeads.includes(l.user_id));
+    newLeads.forEach(l => showDesktopNotif('New Lead! 🔔', l.name + ' just started the bot'));
+
+    // Notify for unread messages
+    Object.entries(allUnread).forEach(([uid, count]) => {
+      if (count > 0) {
+        const lead = allLeads.find(l => l.user_id === uid);
+        if (lead) showDesktopNotif('New message 💬', (lead.name||'Client') + ' sent you a message');
+      }
+    });
+
+    renderAll(allLeads);
+  } catch(e) { console.error(e); }
 }
 
-async function sendMsg(uid) {
-  const text = document.getElementById('msg-' + uid).value.trim();
+async function sendQuick(uid) {
+  const inp  = document.getElementById('qi-' + uid);
+  const inp2 = document.getElementById('qi-' + uid); // same element in both views
+  const text = inp ? inp.value.trim() : '';
   if (!text) return;
   const r = await fetch('/api/message', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({user_id: uid, text})
   });
   const d = await r.json();
-  if (d.ok) { showToast('✅ Message sent!'); document.getElementById('msg-' + uid).value = ''; }
-  else showToast('❌ Failed to send', '#e74c3c');
+  if (d.ok) { showToast('✅ Sent!'); if(inp) inp.value=''; }
+  else showToast('❌ Failed', '#e74c3c');
+}
+
+async function sendMsg(uid) { return sendQuick(uid); }
+
+async function toggleHandled(uid, btn) {
+  const r = await fetch('/api/handled', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({user_id: uid})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    const isNow = d.handled;
+    btn.classList.toggle('active', isNow);
+    btn.textContent = isNow ? '✅ Handled' : 'Mark handled';
+  }
+}
+
+async function saveNote(uid, isDesktop) {
+  const elId = isDesktop ? 'note-dt-' + uid : 'note-' + uid;
+  const savedId = isDesktop ? 'note-saved-dt-' + uid : 'note-saved-' + uid;
+  const el = document.getElementById(elId);
+  if (!el) return;
+  const note = el.value;
+  await fetch('/api/note', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({user_id: uid, note})
+  });
+  allNotes[uid] = note;
+  const savedEl = document.getElementById(savedId);
+  if (savedEl) { savedEl.style.display='block'; setTimeout(()=>savedEl.style.display='none', 2000); }
 }
 
 async function sendBroadcast(target) {
   const text  = document.getElementById('bc-text').value.trim();
   const media = document.getElementById('bc-media').value.trim();
-  if (!text) { showToast('Please write a message first', '#e74c3c'); return; }
-  if (!confirm(`Send to ${target === 'all' ? 'ALL pending' : target} leads?`)) return;
+  if (!text) { showToast('Write a message first', '#e74c3c'); return; }
+  if (!confirm('Send to ' + (target==='all'?'ALL pending':target) + ' leads?')) return;
   const r = await fetch('/api/broadcast', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text, media_url: media, target})
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({text, media_url:media, target})
   });
   const d = await r.json();
-  showToast(`✅ Broadcast sent to ${d.sent} leads!`);
+  showToast('✅ Broadcast sent to ' + d.sent + ' leads!');
 }
 
-// ── CHAT PANEL ──────────────────────────────────────────
+// ── CHAT PANEL ──
 function openChat(uid, name, username) {
   activeChatUserId = uid;
   activeChatName   = name;
   document.getElementById('chat-title').textContent = '💬 ' + name;
-  document.getElementById('chat-sub').textContent   = username ? '@' + username : 'No username';
+  document.getElementById('chat-sub').textContent   = username ? '@'+username : 'No username';
   document.getElementById('chat-overlay').classList.add('open');
   document.getElementById('chat-input').value = '';
+  // Mark as read
+  fetch('/api/mark_read', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({user_id:uid})});
+  allUnread[uid] = 0;
   loadChatMessages();
-  // Poll for new messages every 8 seconds while panel is open
   if (chatPollInterval) clearInterval(chatPollInterval);
-  chatPollInterval = setInterval(loadChatMessages, 8000);
+  chatPollInterval = setInterval(loadChatMessages, 6000);
 }
 
 function closeChat() {
@@ -1001,61 +1195,32 @@ async function loadChatMessages() {
     const r = await fetch('/api/chat/' + activeChatUserId);
     const d = await r.json();
     renderChatMessages(d.messages || []);
-  } catch(e) { console.error(e); }
+  } catch(e) {}
 }
 
 function formatTime(ts) {
-  const d = new Date(ts * 1000);
-  return d.toLocaleTimeString('en-GB', {hour:'2-digit', minute:'2-digit', day:'2-digit', month:'short'});
+  const d = new Date(ts*1000);
+  return d.toLocaleString('en-GB',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'short'});
 }
 
 function renderChatMessages(messages) {
   const box = document.getElementById('chat-messages');
   if (!messages.length) {
-    box.innerHTML = '<div class="chat-empty">No messages yet.<br>When ' + (activeChatName||'this client') + ' messages the bot, you will see them here.</div>';
+    box.innerHTML = '<div class="chat-empty">No messages yet.<br>When this client messages the bot you will see them here.</div>';
     return;
   }
-  const wasAtBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 30;
-  box.innerHTML = messages.map(m => `
-    <div class="chat-bubble ${m.direction}">
-      ${escapeHtml(m.text)}
+  const wasAtBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 40;
+  box.innerHTML = messages.map(m =>
+    `<div class="chat-bubble ${m.direction}">
+      ${escHtml(m.text)}
       <div class="bubble-time">${formatTime(m.time)}</div>
-    </div>
-  `).join('');
-  if (wasAtBottom || messages.length <= 5) {
-    box.scrollTop = box.scrollHeight;
-  }
+    </div>`
+  ).join('');
+  if (wasAtBottom || messages.length <= 5) box.scrollTop = box.scrollHeight;
 }
 
-function escapeHtml(str) {
-  return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
-
-async function sendChatFile() {
-  const fileInput = document.getElementById('chat-file-input');
-  const file = fileInput.files[0];
-  if (!file || !activeChatUserId) return;
-
-  showToast('📤 Sending file...', '#2980b9');
-
-  const formData = new FormData();
-  formData.append('user_id', activeChatUserId);
-  formData.append('file', file);
-
-  try {
-    const r = await fetch('/api/send_file', { method: 'POST', body: formData });
-    const d = await r.json();
-    if (d.ok) {
-      showToast('✅ File sent!');
-      store_client_message(activeChatUserId, '[📎 File: ' + file.name + ']', 'out');
-      await loadChatMessages();
-    } else {
-      showToast('❌ Failed to send file', '#e74c3c');
-    }
-  } catch(e) {
-    showToast('❌ Error sending file', '#e74c3c');
-  }
-  fileInput.value = '';
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
 async function sendChatMsg() {
@@ -1064,29 +1229,41 @@ async function sendChatMsg() {
   if (!text || !activeChatUserId) return;
   input.value = '';
   const r = await fetch('/api/message', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
+    method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({user_id: activeChatUserId, text})
   });
   const d = await r.json();
-  if (d.ok) {
-    showToast('✅ Sent!');
-    await loadChatMessages();
-  } else {
-    showToast('❌ Failed to send', '#e74c3c');
-    input.value = text;
-  }
+  if (d.ok) { await loadChatMessages(); }
+  else { showToast('❌ Failed', '#e74c3c'); input.value = text; }
+}
+
+async function sendChatFile() {
+  const fi = document.getElementById('chat-file-input');
+  const file = fi.files[0];
+  if (!file || !activeChatUserId) return;
+  showToast('📤 Sending...', '#2980b9');
+  const fd = new FormData();
+  fd.append('user_id', activeChatUserId);
+  fd.append('file', file);
+  try {
+    const r = await fetch('/api/send_file', {method:'POST', body:fd});
+    const d = await r.json();
+    if (d.ok) { showToast('✅ File sent!'); await loadChatMessages(); }
+    else showToast('❌ Failed to send file', '#e74c3c');
+  } catch(e) { showToast('❌ Error', '#e74c3c'); }
+  fi.value = '';
 }
 
 function updateClock() {
   const now = new Date();
-  document.getElementById('clock').textContent = now.toLocaleTimeString('en-GB', {
-    hour:'2-digit', minute:'2-digit', second:'2-digit', timeZone:'Europe/London'
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-GB',{
+    hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Europe/London'
   }) + ' UK';
 }
 
+requestNotifPerm();
 loadLeads();
-setInterval(loadLeads, 60000);
+setInterval(loadLeads, 30000);
 setInterval(updateClock, 1000);
 updateClock();
 </script>
@@ -1117,20 +1294,69 @@ def api_leads():
             "drip_count":  d.get("drip_count", 0),
             "steps":       d.get("steps", []),
             "started_at":  d.get("started_at", 0),
+            "last_seen":   d.get("last_seen", 0),
+            "handled":     d.get("handled", False),
         })
     leads.sort(key=lambda x: x["started_at"], reverse=True)
     total     = len(leads)
     completed = sum(1 for l in leads if l["completed"])
     vantage   = sum(1 for l in leads if l.get("broker") == "Vantage")
     puprime   = sum(1 for l in leads if l.get("broker") == "PU Prime")
-    return jsonify({
-        "leads":     leads,
-        "total":     total,
-        "completed": completed,
-        "pending":   total - completed,
-        "vantage":   vantage,
-        "puprime":   puprime,
-    })
+    return jsonify({"leads": leads, "total": total, "completed": completed,
+                    "pending": total - completed, "vantage": vantage, "puprime": puprime})
+
+
+@app.route("/api/unread")
+@requires_auth
+def api_unread():
+    with unread_lock:
+        return jsonify({"unread": load_unread()})
+
+
+@app.route("/api/mark_read", methods=["POST"])
+@requires_auth
+def api_mark_read():
+    uid = request.get_json(force=True).get("user_id")
+    if uid:
+        with unread_lock:
+            unread = load_unread()
+            unread.pop(str(uid), None)
+            save_unread(unread)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/notes")
+@requires_auth
+def api_notes():
+    with notes_lock:
+        return jsonify({"notes": load_notes()})
+
+
+@app.route("/api/note", methods=["POST"])
+@requires_auth
+def api_note():
+    data = request.get_json(force=True)
+    uid  = str(data.get("user_id", ""))
+    note = data.get("note", "")
+    if uid:
+        with notes_lock:
+            notes = load_notes()
+            notes[uid] = note
+            save_notes(notes)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/handled", methods=["POST"])
+@requires_auth
+def api_handled():
+    uid = str(request.get_json(force=True).get("user_id", ""))
+    if uid:
+        with users_lock:
+            if uid in users_db:
+                users_db[uid]["handled"] = not users_db[uid].get("handled", False)
+                save_users(users_db)
+                return jsonify({"ok": True, "handled": users_db[uid]["handled"]})
+    return jsonify({"ok": False})
 
 
 @app.route("/api/chat/<user_id>")
@@ -1138,8 +1364,7 @@ def api_leads():
 def api_chat(user_id):
     with messages_lock:
         msgs = load_messages()
-    messages = msgs.get(str(user_id), [])
-    return jsonify({"messages": messages, "user_id": user_id})
+    return jsonify({"messages": msgs.get(str(user_id), []), "user_id": user_id})
 
 
 @app.route("/api/send_file", methods=["POST"])
@@ -1153,23 +1378,21 @@ def api_send_file():
         file_bytes = file.read()
         fname      = file.filename.lower()
         mime       = file.mimetype or ""
-
         if mime.startswith("image/") or any(fname.endswith(x) for x in [".jpg",".jpeg",".png",".gif",".webp"]):
-            files   = {"photo": (file.filename, file_bytes, mime)}
-            payload = {"chat_id": user_id}
-            r = requests.post(f"{TELEGRAM_URL}/sendPhoto", files=files, data=payload, timeout=20)
+            r = requests.post(f"{TELEGRAM_URL}/sendPhoto",
+                files={"photo": (file.filename, file_bytes, mime)},
+                data={"chat_id": user_id}, timeout=20)
         elif mime.startswith("video/") or any(fname.endswith(x) for x in [".mp4",".mov",".avi"]):
-            files   = {"video": (file.filename, file_bytes, mime)}
-            payload = {"chat_id": user_id}
-            r = requests.post(f"{TELEGRAM_URL}/sendVideo", files=files, data=payload, timeout=30)
+            r = requests.post(f"{TELEGRAM_URL}/sendVideo",
+                files={"video": (file.filename, file_bytes, mime)},
+                data={"chat_id": user_id}, timeout=30)
         else:
-            files   = {"document": (file.filename, file_bytes, mime)}
-            payload = {"chat_id": user_id}
-            r = requests.post(f"{TELEGRAM_URL}/sendDocument", files=files, data=payload, timeout=20)
-
+            r = requests.post(f"{TELEGRAM_URL}/sendDocument",
+                files={"document": (file.filename, file_bytes, mime)},
+                data={"chat_id": user_id}, timeout=20)
         ok = r.json().get("ok", False)
         if ok:
-            store_client_message(user_id, f"[📎 File sent: {file.filename}]", direction="out")
+            store_client_message(user_id, f"[📎 File: {file.filename}]", direction="out")
         return jsonify({"ok": ok})
     except Exception as e:
         logger.error(f"send_file error: {e}")
