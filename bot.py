@@ -736,6 +736,19 @@ tr:hover td { background: #1e1e35; }
   font-size: 13px;
 }
 #chat-send-btn:hover { background: #f0c840; }
+#chat-file-btn {
+  background: #2a2a4e;
+  color: #fff;
+  border: 1px solid #3a3a6e;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 16px;
+  cursor: pointer;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+#chat-file-btn:hover { background: #3a3a6e; }
 </style>
 </head>
 <body>
@@ -817,6 +830,10 @@ tr:hover td { background: #1e1e35; }
     </div>
     <div id="chat-input-area">
       <input type="text" id="chat-input" placeholder="Type a message to send via Telegram..." onkeydown="if(event.key==='Enter') sendChatMsg()" />
+      <label id="chat-file-btn" title="Send image or file">
+        📎
+        <input type="file" id="chat-file-input" accept="image/*,video/*,.pdf,.doc,.docx" style="display:none" onchange="sendChatFile()" />
+      </label>
       <button id="chat-send-btn" onclick="sendChatMsg()">Send ✈️</button>
     </div>
   </div>
@@ -1014,6 +1031,33 @@ function escapeHtml(str) {
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
+async function sendChatFile() {
+  const fileInput = document.getElementById('chat-file-input');
+  const file = fileInput.files[0];
+  if (!file || !activeChatUserId) return;
+
+  showToast('📤 Sending file...', '#2980b9');
+
+  const formData = new FormData();
+  formData.append('user_id', activeChatUserId);
+  formData.append('file', file);
+
+  try {
+    const r = await fetch('/api/send_file', { method: 'POST', body: formData });
+    const d = await r.json();
+    if (d.ok) {
+      showToast('✅ File sent!');
+      store_client_message(activeChatUserId, '[📎 File: ' + file.name + ']', 'out');
+      await loadChatMessages();
+    } else {
+      showToast('❌ Failed to send file', '#e74c3c');
+    }
+  } catch(e) {
+    showToast('❌ Error sending file', '#e74c3c');
+  }
+  fileInput.value = '';
+}
+
 async function sendChatMsg() {
   const input = document.getElementById('chat-input');
   const text  = input.value.trim();
@@ -1096,6 +1140,40 @@ def api_chat(user_id):
         msgs = load_messages()
     messages = msgs.get(str(user_id), [])
     return jsonify({"messages": messages, "user_id": user_id})
+
+
+@app.route("/api/send_file", methods=["POST"])
+@requires_auth
+def api_send_file():
+    user_id = request.form.get("user_id")
+    file    = request.files.get("file")
+    if not user_id or not file:
+        return jsonify({"ok": False})
+    try:
+        file_bytes = file.read()
+        fname      = file.filename.lower()
+        mime       = file.mimetype or ""
+
+        if mime.startswith("image/") or any(fname.endswith(x) for x in [".jpg",".jpeg",".png",".gif",".webp"]):
+            files   = {"photo": (file.filename, file_bytes, mime)}
+            payload = {"chat_id": user_id}
+            r = requests.post(f"{TELEGRAM_URL}/sendPhoto", files=files, data=payload, timeout=20)
+        elif mime.startswith("video/") or any(fname.endswith(x) for x in [".mp4",".mov",".avi"]):
+            files   = {"video": (file.filename, file_bytes, mime)}
+            payload = {"chat_id": user_id}
+            r = requests.post(f"{TELEGRAM_URL}/sendVideo", files=files, data=payload, timeout=30)
+        else:
+            files   = {"document": (file.filename, file_bytes, mime)}
+            payload = {"chat_id": user_id}
+            r = requests.post(f"{TELEGRAM_URL}/sendDocument", files=files, data=payload, timeout=20)
+
+        ok = r.json().get("ok", False)
+        if ok:
+            store_client_message(user_id, f"[📎 File sent: {file.filename}]", direction="out")
+        return jsonify({"ok": ok})
+    except Exception as e:
+        logger.error(f"send_file error: {e}")
+        return jsonify({"ok": False})
 
 
 @app.route("/api/message", methods=["POST"])
