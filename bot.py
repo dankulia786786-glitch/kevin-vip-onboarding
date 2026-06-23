@@ -995,7 +995,7 @@ function formatTime(ts) {
 function renderChatMessages(messages) {
   const box = document.getElementById('chat-messages');
   if (!messages.length) {
-    box.innerHTML = '<div class="chat-empty">No messages yet.<br>When ' + (activeChatName||'this client') + ' messages the bot, you\'ll see them here.</div>';
+    box.innerHTML = '<div class="chat-empty">No messages yet.<br>When ' + (activeChatName||'this client') + ' messages the bot, you will see them here.</div>';
     return;
   }
   const wasAtBottom = box.scrollHeight - box.clientHeight <= box.scrollTop + 30;
