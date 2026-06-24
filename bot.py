@@ -260,15 +260,7 @@ def handle_start(user_id, first_name, username):
         }
         save_users(users_db)
 
-    send_to_user(user_id,
-        f"👋 <b>Welcome, {first_name} | GOLD SIGNALS 🔔</b>\n\n"
-        "Get <b>FREE</b> access to:\n"
-        "✅ VIP Gold Signals — <b>FREE</b>\n"
-        "✅ 50% Deposit Bonus for Life — <b>FREE & Uncapped</b>\n"
-        "✅ Free Vantage Trading Course\n\n"
-        "⏱ Takes less than 2 minutes to complete.\n\n"
-        "👇 Tap below to get started."
-    )
+    # SINGLE message — straight to broker choice
     send_to_user(user_id,
         "🚀 Let's get you set up.\n\n"
         "Please select the broker you're currently using so we can guide you "
@@ -282,7 +274,7 @@ def handle_start(user_id, first_name, username):
     onboarding_state[user_id] = {"step": "broker_choice", "first_name": first_name, "username": username}
     _add_step(user_id, "Started onboarding")
     store_client_message(user_id, "▶️ Client started the bot (/start)", direction="event")
-    store_client_message(user_id, "🤖 Bot: Welcome! Please choose your broker.", direction="out")
+    store_client_message(user_id, "🤖 Bot: Please choose your broker.", direction="out")
 
     mid = notify_owner(
         f"🔔 <b>New Lead Started Onboarding!</b>\n\n"
@@ -526,10 +518,10 @@ def telegram_update():
                 pass
             stored   = onboarding_state.get(user_id, {})
             username = stored.get("username", username)
-            if data == "broker_vantage":      handle_vantage(user_id, name, username)
-            elif data == "broker_puprime":    handle_puprime(user_id, name, username)
-            elif data == "done_vantage":      handle_done(user_id, name, username, "vantage")
-            elif data == "done_puprime":      handle_done(user_id, name, username, "puprime")
+            if data == "broker_vantage":       handle_vantage(user_id, name, username)
+            elif data == "broker_puprime":     handle_puprime(user_id, name, username)
+            elif data == "done_vantage":       handle_done(user_id, name, username, "vantage")
+            elif data == "done_puprime":       handle_done(user_id, name, username, "puprime")
             elif data == "restart_onboarding": handle_start(user_id, name, username)
             return jsonify({"ok": True})
 
