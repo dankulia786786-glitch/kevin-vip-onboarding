@@ -625,6 +625,10 @@ def telegram_update():
                     notify_owner("⚠️ Could not find that client.")
             return jsonify({"ok": True})
 
+        # ── Always store every client message first, no matter what ──
+        if text.strip():
+            store_client_message(user_id, text.strip(), direction="in")
+
         if text.strip() == "/start":
             handle_start(user_id, name, username)
             return jsonify({"ok": True})
@@ -633,9 +637,6 @@ def telegram_update():
         if state.get("step") == "awaiting_account" and text.strip():
             handle_account_number(user_id, name, username, text.strip(), state.get("broker", "unknown"))
             return jsonify({"ok": True})
-
-        if text.strip():
-            store_client_message(user_id, text.strip(), direction="in")
 
         forward_to_owner(user_id, name, username, text)
 
