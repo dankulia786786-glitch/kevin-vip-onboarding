@@ -825,8 +825,15 @@ body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; mi
   <div class="section-title">📢 Broadcast Message</div>
   <div class="broadcast-box">
     <div style="font-size:12px;color:#888;margin-bottom:8px;">Send to ALL pending leads (1 per day limit)</div>
-    <textarea id="bc-text" placeholder="e.g. We just hit TP3 on Gold — members made £420 for FREE today!"></textarea>
-    <input type="text" id="bc-media" placeholder="Optional: image or video URL" />
+    <textarea id="bc-text" placeholder="e.g. BITCOIN SMASHED TP1 ✅✅✅ Our members just made +£103 FOR FREE! You missed this — complete your FREE setup now!"></textarea>
+    <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
+      <label id="bc-file-label" style="display:flex;align-items:center;gap:6px;background:#1e1e35;border:1px solid #2a2a4e;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:12px;color:#aaa;">
+        📎 Attach Image
+        <input type="file" id="bc-file" accept="image/*,video/*" style="display:none" onchange="bcFileSelected()" />
+      </label>
+      <span id="bc-file-name" style="font-size:11px;color:#888"></span>
+      <button id="bc-clear-file" onclick="bcClearFile()" style="display:none;background:none;border:none;color:#e74c3c;cursor:pointer;font-size:12px">✕ Remove</button>
+    </div>
     <div class="btn-row">
       <button class="btn btn-gold" onclick="sendBroadcast('all')">📢 All Pending</button>
       <button class="btn" style="background:#8e44ad;color:#fff" onclick="resetDrips()" title="Reset drip timer — all pending leads will get next message within 12 hours">🔄 Restart Drips</button>
@@ -1160,17 +1167,50 @@ async function resetDrips() {
   else showToast('❌ Failed', '#e74c3c');
 }
 
+function bcFileSelected() {
+  const fi = document.getElementById('bc-file');
+  const nameEl = document.getElementById('bc-file-name');
+  const clearBtn = document.getElementById('bc-clear-file');
+  const label = document.getElementById('bc-file-label');
+  if (fi.files[0]) {
+    nameEl.textContent = fi.files[0].name;
+    clearBtn.style.display = 'inline';
+    label.style.borderColor = '#00dc50';
+    label.style.color = '#00dc50';
+  }
+}
+
+function bcClearFile() {
+  document.getElementById('bc-file').value = '';
+  document.getElementById('bc-file-name').textContent = '';
+  document.getElementById('bc-clear-file').style.display = 'none';
+  const label = document.getElementById('bc-file-label');
+  label.style.borderColor = '#2a2a4e';
+  label.style.color = '#aaa';
+}
+
 async function sendBroadcast(target) {
-  const text  = document.getElementById('bc-text').value.trim();
-  const media = document.getElementById('bc-media').value.trim();
+  const text = document.getElementById('bc-text').value.trim();
+  const fileInput = document.getElementById('bc-file');
+  const file = fileInput.files[0];
   if (!text) { showToast('Write a message first', '#e74c3c'); return; }
   if (!confirm('Send to ' + (target==='all'?'ALL pending':target) + ' leads?')) return;
-  const r = await fetch('/api/broadcast', {
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({text, media_url:media, target})
-  });
+
+  showToast('📤 Sending...', '#2980b9');
+
+  const fd = new FormData();
+  fd.append('text', text);
+  fd.append('target', target);
+  if (file) fd.append('image', file);
+
+  const r = await fetch('/api/broadcast_file', {method:'POST', body: fd});
   const d = await r.json();
-  showToast('✅ Broadcast sent to ' + d.sent + ' leads!');
+  if (d.ok) {
+    showToast('✅ Broadcast sent to ' + d.sent + ' leads!');
+    bcClearFile();
+  } else {
+    showToast('❌ Failed to send', '#e74c3c');
+  }
 }
 
 // ── CHAT PANEL ──
@@ -1457,6 +1497,66 @@ def api_broadcast():
             users_db[uid]["last_drip"] = time.time()
             save_users(users_db)
         sent += 1
+
+    broadcasts = load_broadcasts()
+    broadcasts.append({"time": time.time(), "text": text[:100], "sent": sent, "target": target})
+    save_broadcasts(broadcasts[-50:])
+
+    return jsonify({"ok": True, "sent": sent})
+
+
+@app.route("/api/broadcast_file", methods=["POST"])
+@requires_auth
+def api_broadcast_file():
+    text      = request.form.get("text", "")
+    target    = request.form.get("target", "all")
+    image     = request.files.get("image")
+
+    if not text:
+        return jsonify({"ok": False, "sent": 0})
+
+    image_bytes = image.read() if image else None
+    mime        = image.mimetype if image else "image/jpeg"
+    fname       = image.filename if image else "image.jpg"
+
+    with users_lock:
+        snapshot = dict(users_db)
+
+    sent = 0
+    for uid, udata in snapshot.items():
+        if udata.get("completed"):
+            continue
+        broker = udata.get("broker", "")
+        if target == "vantage"   and broker != "Vantage":  continue
+        if target == "puprime"   and broker != "PU Prime": continue
+        if target == "no_broker" and broker:               continue
+
+        time.sleep(random.uniform(0.5, 2))
+
+        try:
+            if image_bytes:
+                is_video = mime.startswith("video/") or any(fname.lower().endswith(x) for x in [".mp4",".mov",".avi"])
+                if is_video:
+                    r = requests.post(f"{TELEGRAM_URL}/sendVideo",
+                        files={"video": (fname, image_bytes, mime)},
+                        data={"chat_id": uid, "caption": text, "parse_mode": "HTML",
+                              "reply_markup": json.dumps(JOIN_BUTTON)}, timeout=30)
+                else:
+                    r = requests.post(f"{TELEGRAM_URL}/sendPhoto",
+                        files={"photo": (fname, image_bytes, mime)},
+                        data={"chat_id": uid, "caption": text, "parse_mode": "HTML",
+                              "reply_markup": json.dumps(JOIN_BUTTON)}, timeout=20)
+                ok = r.json().get("ok", False)
+            else:
+                ok = send_to_user(uid, text, keyboard=JOIN_BUTTON)
+
+            if ok:
+                with users_lock:
+                    users_db[uid]["last_drip"] = time.time()
+                    save_users(users_db)
+                sent += 1
+        except Exception as e:
+            logger.error(f"broadcast_file error for {uid}: {e}")
 
     broadcasts = load_broadcasts()
     broadcasts.append({"time": time.time(), "text": text[:100], "sent": sent, "target": target})
