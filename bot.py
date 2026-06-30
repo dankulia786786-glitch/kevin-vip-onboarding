@@ -171,15 +171,20 @@ reply_map        = {}
 
 # ─── DRIP MESSAGES ────────────────────────────────────────────────────────────
 DRIP_MESSAGES = [
-    "🔔 <b>Gold signal dropping in the next 10 minutes!</b>\n\nOur FREE PM group is about to receive a live Gold signal. You're missing out!\n\n✅ Complete your FREE setup in 2 minutes and get every signal direct to your phone.\n\n❓ Need help? Message us: @Kevsupportteam\n\n👇 TAP BELOW TO JOIN FREE NOW 👇",
-    "💰 <b>WE JUST HIT TP on Gold — members made £150+ FOR FREE!</b>\n\nOur FREE PM group members were already positioned and took profit.\n\nYou could have been in this trade. Don't miss the next one.\n\n❓ Need help? Message us: @Kevsupportteam\n\n👇 Complete your FREE setup now — takes 2 minutes!",
-    "🔥 <b>Bitcoin signal firing soon!</b>\n\nBTC is setting up for a big move. Our FREE PM group will get the signal before it happens.\n\nYou're one step away from joining.\n\n❓ Need help? Message us: @Kevsupportteam\n\n👇 Complete your FREE setup — takes 2 minutes!",
-    "⚠️ <b>You started the process but never finished!</b>\n\nYou're so close to getting FREE daily Gold & Bitcoin signals.\n\nHundreds of our members are making money on every signal — FOR FREE.\n\nDon't let this slip away.\n\n❓ Any questions? Message us: @Kevsupportteam\n\n👇 Complete your FREE setup now!",
-    "🏆 <b>ALL TARGETS HIT on Gold today!</b>\n\nOur FREE PM group members just secured full profits on today's Gold trade.\n\nThis is what you're missing — FREE signals, every single day.\n\n❓ Need help completing your setup? Message: @Kevsupportteam\n\n👇 JOIN FREE NOW — takes 2 minutes!",
-    "📈 <b>Gold is moving RIGHT NOW!</b>\n\nOur FREE PM group is already in a live trade. Members are up on this move.\n\nEvery signal is 100% FREE — no subscription, no hidden fees.\n\n❓ Questions? Message us: @Kevsupportteam\n\n👇 Complete your FREE setup and never miss a trade again!",
-    "💎 <b>FREE VIP access — Gold & Bitcoin signals daily.</b>\n\nPlus a 50% deposit bonus for life — completely FREE and uncapped.\n\nOver 1,000 members already in the group. Don't get left behind.\n\n❓ Need support? Message: @Kevsupportteam\n\n👇 Claim your FREE access now — 2 minutes!",
-    "🚨 <b>LAST REMINDER — your FREE access is waiting!</b>\n\nYou started your setup but didn't finish. Your spot in Kevin's FREE Gold Signals group is still available.\n\nOnce this fills up, access may be restricted.\n\n❓ Any issues? Message us: @Kevsupportteam\n\n👇 Complete your setup NOW before it's too late!",
+    "⏰ <b>Gold signal expected in the next 10 minutes!</b>\n\nOur PM group gets the entry, the chart, and the TP result the second it happens — completely FREE.\n\nDon't watch from the sidelines.\n\n❓ Need a hand? Message: @Kevsupportteam\n\n👇 JOIN THE PM NOW 👇",
+    "💰 <b>GOLD JUST SMASHED TP — members banked profit FOR FREE!</b>\n\nWhile you were outside the group, our PM members had the entry, the SL, the TP — all sent straight to their phone.\n\nThis happens multiple times a day.\n\n❓ Stuck? Message: @Kevsupportteam\n\n👇 Complete your FREE setup now",
+    "🪙 <b>Bitcoin signal incoming — get it before it moves.</b>\n\nWe trade Gold AND Bitcoin in the same FREE group, including weekend BTC setups when most signal groups go quiet.\n\nYou're one step from being inside.\n\n❓ Questions? @Kevsupportteam\n\n👇 JOIN THE PM NOW",
+    "📊 <b>You started but never finished setting up.</b>\n\nMembers inside the group are getting up to 12+ signals a day across Gold and Bitcoin — all FREE if you've got a Vantage or PU Prime account.\n\nTakes 2 minutes to unlock.\n\n❓ Need help? @Kevsupportteam\n\n👇 Finish your FREE setup",
+    "✅ <b>ALL TARGETS HIT on today's Gold trade!</b>\n\nFull profits secured by everyone already inside the PM group. Every entry, every TP, every chart — sent live, completely FREE.\n\nThis is what waiting is costing you.\n\n❓ Help: @Kevsupportteam\n\n👇 JOIN FREE NOW",
+    "🔥 <b>Live signal dropping shortly on Gold or Bitcoin.</b>\n\nWe're not a once-a-day group — members get multiple high quality setups daily, weekends included.\n\nNo subscription. No catch. Just complete the free setup once.\n\n❓ @Kevsupportteam if you're stuck\n\n👇 Complete setup",
+    "💎 <b>FREE access. Up to 12+ signals a day. Gold + Bitcoin.</b>\n\nWeekend Bitcoin trades when most groups go silent. 50% deposit bonus for life on top.\n\nAll it takes is finishing what you started.\n\n❓ Message: @Kevsupportteam\n\n👇 JOIN THE PM NOW",
+    "🚨 <b>Your spot is still open — but not guaranteed.</b>\n\nYou clicked start but didn't complete the steps. Members already inside are getting Gold and Bitcoin signals around the clock, completely FREE.\n\n❓ Need support? @Kevsupportteam\n\n👇 Finish your FREE setup before it closes",
+    "📈 <b>Bitcoin and Gold both moving today.</b>\n\nOur PM group covers both markets, every day — including weekends when most traders are asleep on opportunities.\n\nFree for anyone with a Vantage or PU Prime account.\n\n❓ @Kevsupportteam\n\n👇 JOIN FREE NOW",
+    "🏆 <b>Another TP smashed — full profits locked in for members.</b>\n\nThe chart, the entry, the result — it's all shared live inside the PM group the second it happens.\n\nYou're missing it right now.\n\n❓ Help: @Kevsupportteam\n\n👇 Complete your FREE setup",
+    "⚡ <b>Setup taking shape on Gold — signal could fire any minute.</b>\n\nGet it the second it's live by finishing your FREE access. Takes under 2 minutes.\n\n❓ Questions? @Kevsupportteam\n\n👇 JOIN THE PM NOW",
+    "🎯 <b>12+ signals a day. Gold, Bitcoin, and weekend BTC trades.</b>\n\nAll 100% FREE with a Vantage or PU Prime account — no subscription required.\n\nYou're so close to being inside.\n\n❓ @Kevsupportteam\n\n👇 Finish your FREE setup now",
 ]
+
 
 JOIN_BUTTON = {"inline_keyboard": [[{"text": "👉 JOIN FREE NOW 👈", "callback_data": "restart_onboarding"}]]}
 
@@ -451,16 +456,22 @@ def handle_account_number(user_id, first_name, username, account_number, broker)
 
 # ─── DRIP SCHEDULER ───────────────────────────────────────────────────────────
 MAX_DRIP_DAYS = 30
-DRIP_INTERVAL = 43200  # 12 hours
+DRIP_INTERVAL = 25200  # 7 hours (within your 6-8 hour target)
 
 def drip_scheduler():
-    logger.info("Drip scheduler started")
+    logger.info("✅ DRIP SCHEDULER THREAD STARTED")
+    cycle = 0
     while True:
+        cycle += 1
         try:
             now = time.time()
             with users_lock:
                 snapshot = dict(users_db)
 
+            pending_count = sum(1 for d in snapshot.values() if not d.get("completed"))
+            logger.info(f"[Drip cycle #{cycle}] Checking {pending_count} pending leads...")
+
+            due_count = 0
             for uid, data in snapshot.items():
                 if data.get("completed"):
                     continue
@@ -471,7 +482,8 @@ def drip_scheduler():
                 if now - last_drip < DRIP_INTERVAL:
                     continue
 
-                time.sleep(random.uniform(5, 120))
+                due_count += 1
+                time.sleep(random.uniform(5, 30))
 
                 count = data.get("drip_count", 0)
                 msg   = DRIP_MESSAGES[count % len(DRIP_MESSAGES)]
@@ -481,11 +493,23 @@ def drip_scheduler():
                         users_db[uid]["last_drip"]  = time.time()
                         users_db[uid]["drip_count"] = count + 1
                         save_users(users_db)
-                    logger.info(f"Drip #{count+1} sent to {uid}")
+                    logger.info(f"✅ Drip #{count+1} sent to {uid}")
+                else:
+                    logger.error(f"❌ Drip FAILED to send to {uid}")
+
+            logger.info(f"[Drip cycle #{cycle}] Complete. {due_count} leads were due and processed.")
 
         except Exception as e:
-            logger.error(f"Drip error: {e}")
+            logger.error(f"Drip scheduler error: {e}")
         time.sleep(300)
+
+
+def start_background_threads():
+    """Called at import time so it works under gunicorn AND direct python run."""
+    threading.Thread(target=drip_scheduler, daemon=True).start()
+    logger.info("Background threads launched (drip scheduler)")
+
+start_background_threads()
 
 # ─── FORWARD TP TO INCOMPLETE LEADS ─────────────────────────────────────────
 last_tp_forward = {}
@@ -1634,6 +1658,6 @@ def health():
 
 
 if __name__ == "__main__":
-    threading.Thread(target=drip_scheduler, daemon=True).start()
+    # Background threads already started above via start_background_threads()
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
