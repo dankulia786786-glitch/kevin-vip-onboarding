@@ -461,7 +461,7 @@ def notify_owner(text):
 JOIN_BUTTON = {
     "inline_keyboard": [[{
         "text": "👉 JOIN PM NOW FOR FREE! 👈",
-        "url": "https://t.me/premiumgold_bot"
+        "url": "https://t.me/KevinGoldVIP_bot"
     }]]
 }
 
