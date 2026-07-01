@@ -250,17 +250,19 @@ def forward_to_owner(user_id, name, username, text):
 def handle_start(user_id, first_name, username):
     with users_lock:
         existing = users_db.get(str(user_id), {})
+        is_new = str(user_id) not in users_db
         users_db[str(user_id)] = {
             "name":        first_name,
             "username":    username,
             "started_at":  existing.get("started_at", time.time()),
             "completed":   existing.get("completed", False),
-            "last_drip":   time.time(),
+            # Only reset last_drip for brand new users, not returning ones
+            "last_drip":   existing.get("last_drip", time.time()) if not is_new else time.time(),
             "drip_count":  existing.get("drip_count", 0),
             "broker":      existing.get("broker"),
             "mt5_account": existing.get("mt5_account"),
             "steps":       existing.get("steps", []),
-            "last_seen":   existing.get("last_seen", time.time()),
+            "last_seen":   time.time(),  # Always update last_seen
         }
         save_users(users_db)
 
@@ -614,6 +616,11 @@ def telegram_update():
             stored   = onboarding_state.get(user_id, {})
             username = stored.get("username", username)
 
+            # If user not in DB at all (e.g. after restart), register them first
+            if str(user_id) not in users_db:
+                handle_start(user_id, name, username)
+                return jsonify({"ok": True})
+
             if data == "broker_vantage":
                 handle_vantage(user_id, name, username)
             elif data == "broker_puprime":
@@ -653,7 +660,12 @@ def telegram_update():
         if text.strip():
             store_client_message(user_id, text.strip(), direction="in")
 
-        if text.strip() == "/start":
+        # ── Auto-register if not in DB (catches edge cases) ──
+        if str(user_id) not in users_db and text.strip():
+            handle_start(user_id, name, username)
+            return jsonify({"ok": True})
+
+        if text.strip().startswith("/start"):
             handle_start(user_id, name, username)
             return jsonify({"ok": True})
 
@@ -661,6 +673,17 @@ def telegram_update():
         if state.get("step") == "awaiting_account" and text.strip():
             handle_account_number(user_id, name, username, text.strip(), state.get("broker", "unknown"))
             return jsonify({"ok": True})
+
+        # If user is in DB, chose a broker, clicked DONE but state was lost (server restart)
+        # and they type their MT5 number — detect it (pure digits) and handle it
+        if text.strip().isdigit() and len(text.strip()) >= 5:
+            uid_data = users_db.get(str(user_id), {})
+            broker = uid_data.get("broker", "").lower()
+            if broker and not uid_data.get("completed"):
+                broker_key = "vantage" if broker == "vantage" else "puprime"
+                logger.info(f"Auto-detecting MT5 number from {user_id}: {text.strip()}")
+                handle_account_number(user_id, name, username, text.strip(), broker_key)
+                return jsonify({"ok": True})
 
         forward_to_owner(user_id, name, username, text)
 
