@@ -197,6 +197,8 @@ def store_client_message(user_id, text, direction="in"):
 users_db = load_users()
 onboarding_state = {}
 reply_map        = {}
+processed_callbacks = {}   # dedup: callback_query_id -> timestamp
+callback_lock       = threading.Lock()
 
 # ─── DRIP MESSAGES ────────────────────────────────────────────────────────────
 DRIP_MESSAGES = [
@@ -628,6 +630,27 @@ def telegram_update():
             name     = user.get("first_name", "Friend")
             username = user.get("username", "no username")
             data     = cq.get("data", "")
+            cq_id    = str(cq.get("id", ""))
+
+            # ── DEDUP: ignore if we've already processed this exact callback ──
+            now_ts = time.time()
+            with callback_lock:
+                # Clean out old entries (older than 5 min)
+                for k in [k for k, t in processed_callbacks.items() if now_ts - t > 300]:
+                    processed_callbacks.pop(k, None)
+                # Dedup key combines user + action so a genuine re-tap later still works,
+                # but Telegram's instant retry of the SAME callback id is blocked
+                dedup_key = f"{user_id}_{data}"
+                if cq_id and cq_id in processed_callbacks:
+                    return jsonify({"ok": True})
+                # Also block same user+action within 3 seconds (double-tap / retry)
+                last = processed_callbacks.get(dedup_key, 0)
+                if now_ts - last < 3:
+                    return jsonify({"ok": True})
+                if cq_id:
+                    processed_callbacks[cq_id] = now_ts
+                processed_callbacks[dedup_key] = now_ts
+
             try:
                 requests.post(f"{TELEGRAM_URL}/answerCallbackQuery",
                               json={"callback_query_id": cq["id"]}, timeout=5)
