@@ -47,10 +47,12 @@ BROADCAST_FILE = "/data/broadcasts.json"
 MESSAGES_FILE  = "/data/messages.json"
 UNREAD_FILE    = "/data/unread.json"
 NOTES_FILE     = "/data/notes.json"
+BLOCKED_FILE   = "/data/blocked.json"
 users_lock     = threading.Lock()
 messages_lock  = threading.Lock()
 unread_lock    = threading.Lock()
 notes_lock     = threading.Lock()
+blocked_lock   = threading.Lock()
 
 def load_users():
     try:
@@ -138,6 +140,33 @@ def save_notes(data):
             json.dump(data, f)
     except Exception as e:
         logger.error(f"Save notes error: {e}")
+
+
+def load_blocked():
+    try:
+        if os.path.exists(BLOCKED_FILE):
+            with open(BLOCKED_FILE, "r") as f:
+                return json.load(f)
+    except Exception:
+        pass
+    return []
+
+def save_blocked(data):
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        with open(BLOCKED_FILE, "w") as f:
+            json.dump(data, f)
+    except Exception as e:
+        logger.error(f"Save blocked error: {e}")
+
+def is_blocked(username):
+    """Check if a username is on the blocked list (case-insensitive)."""
+    if not username or username == "no username":
+        return False
+    uname = username.lower().lstrip("@").strip()
+    with blocked_lock:
+        blocked = load_blocked()
+    return uname in [b.lower().lstrip("@").strip() for b in blocked]
 
 def store_client_message(user_id, text, direction="in"):
     uid = str(user_id)
@@ -616,6 +645,11 @@ def telegram_update():
             stored   = onboarding_state.get(user_id, {})
             username = stored.get("username", username)
 
+            # ── BLOCKED USER CHECK — silently ignore button taps ──
+            if is_blocked(username):
+                logger.info(f"🚫 Blocked user tapped button (ignored): @{username}")
+                return jsonify({"ok": True})
+
             # If user not in DB at all (e.g. after restart), register them first
             if str(user_id) not in users_db:
                 handle_start(user_id, name, username)
@@ -642,6 +676,11 @@ def telegram_update():
         name     = user.get("first_name", "Friend")
         username = user.get("username", "no username")
         text     = message.get("text", "")
+
+        # ── BLOCKED USER CHECK — silently ignore all messages ──
+        if user_id != str(OWNER_ID) and is_blocked(username):
+            logger.info(f"🚫 Blocked user messaged (ignored): @{username}")
+            return jsonify({"ok": True})
 
         if user_id == str(OWNER_ID):
             reply_to = message.get("reply_to_message", {})
@@ -875,7 +914,7 @@ body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; mi
     <textarea id="bc-text" placeholder="e.g. BITCOIN SMASHED TP1 ✅✅✅ Our members just made +£103 FOR FREE! You missed this — complete your FREE setup now!"></textarea>
     <div style="display:flex;gap:8px;margin-top:8px;align-items:center;flex-wrap:wrap">
       <label id="bc-file-label" style="display:flex;align-items:center;gap:6px;background:#1e1e35;border:1px solid #2a2a4e;border-radius:8px;padding:7px 12px;cursor:pointer;font-size:12px;color:#aaa;">
-        📎 Attach Image
+        📎 Attach Image / Video
         <input type="file" id="bc-file" accept="image/*,video/*" style="display:none" onchange="bcFileSelected()" />
       </label>
       <span id="bc-file-name" style="font-size:11px;color:#888"></span>
@@ -887,6 +926,16 @@ body { font-family: 'Segoe UI', sans-serif; background: #0f0f1a; color: #fff; mi
       <button class="btn btn-blue" onclick="sendBroadcast('no_broker')">Not Started</button>
       <button class="btn btn-green" onclick="sendBroadcast('vantage')">Vantage Only</button>
       <button class="btn btn-red" onclick="sendBroadcast('puprime')">PU Prime Only</button>
+    </div>
+  </div>
+
+  <div class="section-title">🚫 Blocked Users</div>
+  <div class="broadcast-box">
+    <div style="font-size:12px;color:#888;margin-bottom:8px;">Paste usernames (one per line, with or without @). Blocked users are silently ignored — they can't start the bot, get no messages, and never enter your leads.</div>
+    <textarea id="blocked-text" placeholder="@baduser1&#10;@baduser2&#10;spammer3" style="min-height:60px"></textarea>
+    <div class="btn-row">
+      <button class="btn" style="background:#c0392b;color:#fff" onclick="saveBlocked()">🚫 Save Blocked List</button>
+      <span id="blocked-count" style="font-size:12px;color:#888;align-self:center"></span>
     </div>
   </div>
 
@@ -1206,6 +1255,32 @@ async function saveNote(uid, isDesktop) {
   if (savedEl) { savedEl.style.display='block'; setTimeout(()=>savedEl.style.display='none', 2000); }
 }
 
+async function loadBlocked() {
+  try {
+    const r = await fetch('/api/blocked');
+    const d = await r.json();
+    const list = d.blocked || [];
+    document.getElementById('blocked-text').value = list.map(u => '@' + u).join('\n');
+    document.getElementById('blocked-count').textContent = list.length + ' blocked';
+  } catch(e) {}
+}
+
+async function saveBlocked() {
+  const usernames = document.getElementById('blocked-text').value;
+  const r = await fetch('/api/blocked', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({usernames})
+  });
+  const d = await r.json();
+  if (d.ok) {
+    showToast('🚫 Blocked list saved — ' + d.count + ' users blocked');
+    document.getElementById('blocked-count').textContent = d.count + ' blocked';
+    document.getElementById('blocked-text').value = (d.blocked||[]).map(u => '@' + u).join('\n');
+  } else {
+    showToast('❌ Failed to save', '#e74c3c');
+  }
+}
+
 async function resetDrips() {
   if (!confirm('Reset drip timer for ALL pending leads? They will each receive the next drip message within 12 hours.')) return;
   const r = await fetch('/api/reset_drips', {method:'POST', headers:{'Content-Type':'application/json'}, body:'{}'});
@@ -1360,6 +1435,7 @@ function updateClock() {
 
 requestNotifPerm();
 loadLeads();
+loadBlocked();
 setInterval(loadLeads, 30000);
 setInterval(updateClock, 1000);
 updateClock();
@@ -1610,6 +1686,37 @@ def api_broadcast_file():
     save_broadcasts(broadcasts[-50:])
 
     return jsonify({"ok": True, "sent": sent})
+
+
+@app.route("/api/blocked", methods=["GET"])
+@requires_auth
+def api_get_blocked():
+    with blocked_lock:
+        return jsonify({"blocked": load_blocked()})
+
+
+@app.route("/api/blocked", methods=["POST"])
+@requires_auth
+def api_set_blocked():
+    data = request.get_json(force=True)
+    raw  = data.get("usernames", "")
+    # Accept newline or comma separated
+    names = []
+    for chunk in raw.replace(",", "\n").split("\n"):
+        u = chunk.strip().lstrip("@").strip()
+        if u:
+            names.append(u)
+    # Deduplicate case-insensitively, preserve order
+    seen = set()
+    clean = []
+    for u in names:
+        if u.lower() not in seen:
+            seen.add(u.lower())
+            clean.append(u)
+    with blocked_lock:
+        save_blocked(clean)
+    logger.info(f"Blocked list updated: {len(clean)} usernames")
+    return jsonify({"ok": True, "blocked": clean, "count": len(clean)})
 
 
 @app.route("/api/reset_drips", methods=["POST"])
