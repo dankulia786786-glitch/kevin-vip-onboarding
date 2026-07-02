@@ -296,16 +296,7 @@ def handle_start(user_id, first_name, username):
         save_users(users_db)
 
     send_to_user(user_id,
-        f"👋 <b>Welcome, {first_name} | GOLD SIGNALS 🔔</b>\n\n"
-        "Get <b>FREE</b> access to:\n"
-        "✅ VIP Gold Signals — <b>FREE</b>\n"
-        "✅ 50% Deposit Bonus for Life — <b>FREE & Uncapped</b>\n"
-        "✅ Free Vantage Trading Course\n\n"
-        "⏱ Takes less than 2 minutes to complete.\n\n"
-        "👇 Tap below to get started."
-    )
-    send_to_user(user_id,
-        "🚀 Let's get you set up.\n\n"
+        "🚀 <b>Let's get you set up.</b>\n\n"
         "Please select the broker you're currently using so we can guide you "
         "through the correct setup process.\n\n"
         "👇 Choose your broker below:",
