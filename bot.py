@@ -1502,7 +1502,9 @@ def api_leads():
             "last_seen":   d.get("last_seen", 0),
             "handled":     d.get("handled", False),
         })
-    leads.sort(key=lambda x: x["started_at"], reverse=True)
+    # Sort by most recent activity — whoever messaged/acted last goes to the top
+    # (like WhatsApp/Telegram). Falls back to started_at if never seen.
+    leads.sort(key=lambda x: max(x.get("last_seen", 0) or 0, x.get("started_at", 0) or 0), reverse=True)
     total     = len(leads)
     completed = sum(1 for l in leads if l["completed"])
     vantage   = sum(1 for l in leads if l.get("broker") == "Vantage")
