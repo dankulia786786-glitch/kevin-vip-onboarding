@@ -343,6 +343,8 @@ def handle_vantage(user_id, first_name, username):
             save_users(users_db)
     _add_step(user_id, "Chose Vantage")
 
+    # Image first
+    send_photo_to_user(user_id, VANTAGE_IMAGE)
     send_to_user(user_id,
         "▓▓░░░ <b>40% complete</b>\n\n"
         "🚀 <b>Complete the steps below to activate your FREE Premium Group access.</b> (Takes 10s)\n\n"
@@ -353,10 +355,8 @@ def handle_vantage(user_id, first_name, username):
         "3️⃣ Enter the following details exactly as shown:\n"
         "✅ Partnership Type: IB\n"
         "✅ IB Code: <b>58576</b>\n"
-        "✅ Reason: PM\n\n"
-        "👇 Step-by-step guide below:"
+        "✅ Reason: PM"
     )
-    send_photo_to_user(user_id, VANTAGE_IMAGE)
     send_to_user(user_id,
         "🚨 <b>IMPORTANT</b>\n\n"
         "🚫 Please close all open positions before initiating the transfer.\n"
@@ -388,6 +388,8 @@ def handle_puprime(user_id, first_name, username):
             save_users(users_db)
     _add_step(user_id, "Chose PU Prime")
 
+    # Image first
+    send_photo_to_user(user_id, PUPRIME_IMAGE)
     send_to_user(user_id,
         "▓▓░░░ <b>40% complete</b>\n\n"
         "🚀 <b>Complete the steps below to activate your FREE Premium Group access.</b> (Takes 10s)\n\n"
@@ -398,10 +400,8 @@ def handle_puprime(user_id, first_name, username):
         "3️⃣ Enter the following details exactly as shown:\n"
         "✅ Partnership Type: IB\n"
         "✅ IB Code: <b>50151</b>\n"
-        "✅ Reason: PM\n\n"
-        "👇 Step-by-step guide below:"
+        "✅ Reason: PM"
     )
-    send_photo_to_user(user_id, PUPRIME_IMAGE)
     send_to_user(user_id,
         "🚨 <b>IMPORTANT</b>\n\n"
         "🚫 Please close all open positions before initiating the transfer.\n"
