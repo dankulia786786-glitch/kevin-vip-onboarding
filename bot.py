@@ -298,7 +298,10 @@ def handle_start(user_id, first_name, username):
         save_users(users_db)
 
     send_to_user(user_id,
-        "🚀 <b>Let's get you set up.</b>\n\n"
+        f"👋 <b>Welcome, {first_name} | GOLD SIGNALS 🔔</b>\n\n"
+        "▓░░░░ <b>20% complete</b>\n\n"
+        "🚀 <b>Let's get you set up.</b>\n"
+        "⏱️ Takes less than 20 seconds to complete.\n\n"
         "Please select the broker you're currently using so we can guide you "
         "through the correct setup process.\n\n"
         "👇 Choose your broker below:",
@@ -341,10 +344,11 @@ def handle_vantage(user_id, first_name, username):
     _add_step(user_id, "Chose Vantage")
 
     send_to_user(user_id,
+        "▓▓░░░ <b>40% complete</b>\n\n"
         "🚀 <b>Complete the steps below to activate your FREE Premium Group access.</b> (Takes 10s)\n\n"
         "1️⃣ Log-in to your Vantage client portal:\n👇\n"
         "https://secure.vantagemarkets.com/logout?lang=en_US\n\n"
-        "2️⃣ Fill the Form 📋\n👇\n"
+        "2️⃣ After Log-in, Please click link below & Fill the Form 📋\n👇\n"
         "https://secure.vantagemarkets.com/profile/transfer-ib-affiliate\n\n"
         "3️⃣ Enter the following details exactly as shown:\n"
         "✅ Partnership Type: IB\n"
@@ -385,10 +389,11 @@ def handle_puprime(user_id, first_name, username):
     _add_step(user_id, "Chose PU Prime")
 
     send_to_user(user_id,
+        "▓▓░░░ <b>40% complete</b>\n\n"
         "🚀 <b>Complete the steps below to activate your FREE Premium Group access.</b> (Takes 10s)\n\n"
         "1️⃣ Log in to your PU Prime Client Portal\n👇\n"
         "https://myaccount.puprime.com/home\n\n"
-        "2️⃣ Open the IB Transfer Form\n👇\n"
+        "2️⃣ After Log-in, Please click link below & Open the IB Transfer Form\n👇\n"
         "https://myaccount.puprime.com/profile/transfer-ib-affiliate\n\n"
         "3️⃣ Enter the following details exactly as shown:\n"
         "✅ Partnership Type: IB\n"
@@ -429,9 +434,15 @@ def handle_done(user_id, first_name, username, broker):
     store_client_message(user_id, "🤖 Bot: Please enter your MT4/MT5 account number.", direction="out")
 
     send_to_user(user_id,
+        "▓▓▓▓░ <b>80% complete</b>\n\n"
         "🎉 <b>Almost there — you're getting FREE access!</b>\n\n"
-        "Please enter your MT4/MT5 Account Number below.\n\n"
-        "👇 This will be used to verify your account and activate your FREE Premium Group access."
+        "Please provide ONE of the following to verify your account:\n\n"
+        "✅ Your MT4/MT5 Account Number\n"
+        "  — or —\n"
+        "✅ Your account email\n"
+        "  — or —\n"
+        "✅ Your account UID\n\n"
+        "👇 Just type it below and send."
     )
     onboarding_state[user_id] = {"step": "awaiting_account", "broker": broker, "first_name": first_name, "username": username}
     mid = notify_owner(
@@ -460,9 +471,10 @@ def handle_account_number(user_id, first_name, username, account_number, broker)
             save_users(users_db)
 
     send_to_user(user_id,
-        "✅ <b>Account number received!</b>\n\n"
+        "▓▓▓▓▓ <b>100% complete</b> ✅\n\n"
+        "✅ <b>Details received!</b>\n\n"
         "Our team will verify your account and activate your FREE Premium Group access shortly.\n\n"
-        "🏆 Welcome to Kevin's Gold Signals VIP!\n\n"
+        "🏆 Welcome to Gold PM Group!\n\n"
         "Our team will be in touch with you very soon. 🙌"
     )
     mid = notify_owner(
@@ -728,14 +740,20 @@ def telegram_update():
             return jsonify({"ok": True})
 
         # If user is in DB, chose a broker, clicked DONE but state was lost (server restart)
-        # and they type their MT5 number — detect it (pure digits) and handle it
-        if text.strip().isdigit() and len(text.strip()) >= 5:
+        # accept their verification detail (number, email, or UID)
+        t = text.strip()
+        looks_like_account = (
+            (t.isdigit() and len(t) >= 5) or           # MT5 number
+            ("@" in t and "." in t) or                  # email
+            (len(t) >= 5 and len(t) <= 40 and " " not in t)  # UID / account ref
+        )
+        if looks_like_account:
             uid_data = users_db.get(str(user_id), {})
-            broker = uid_data.get("broker", "").lower()
+            broker = (uid_data.get("broker") or "").lower()
             if broker and not uid_data.get("completed"):
                 broker_key = "vantage" if broker == "vantage" else "puprime"
-                logger.info(f"Auto-detecting MT5 number from {user_id}: {text.strip()}")
-                handle_account_number(user_id, name, username, text.strip(), broker_key)
+                logger.info(f"Auto-detecting account detail from {user_id}: {t}")
+                handle_account_number(user_id, name, username, t, broker_key)
                 return jsonify({"ok": True})
 
         forward_to_owner(user_id, name, username, text)
